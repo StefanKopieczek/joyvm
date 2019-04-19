@@ -12,7 +12,7 @@ mod classes {
         pub attributes: Vec<Attribute>,
     }
 
-    type ConstantRef = u16;
+    pub struct ConstantRef(u16);
 
     pub enum Constant {
         Dummy,
