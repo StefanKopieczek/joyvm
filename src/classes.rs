@@ -1,3 +1,4 @@
+#[derive(PartialEq, Debug)]
 pub struct Class {
     pub minor_version: u16,
     pub major_version: u16,
@@ -11,9 +12,13 @@ pub struct Class {
     pub attributes: Vec<Attribute>,
 }
 
+#[derive(PartialEq, Eq, Debug)]
 pub struct ConstantIndex(u16);
+
+#[derive(PartialEq, Eq, Debug)]
 pub struct MethodIndex(u16);
 
+#[derive(PartialEq, Debug)]
 pub enum Constant {
     Utf8(String),
     Integer(u32),
@@ -67,6 +72,7 @@ bitflags! {
     }
 }
 
+#[derive(PartialEq, Eq, Debug)]
 pub struct Field {
     pub flags: FieldFlags,
     pub name: ConstantIndex,
@@ -88,6 +94,7 @@ bitflags! {
     }
 }
 
+#[derive(PartialEq, Eq, Debug)]
 pub struct Method {
     pub flags: MethodFlags,
     pub name: ConstantIndex,
@@ -112,11 +119,13 @@ bitflags! {
     }
 }
 
+#[derive(PartialEq, Eq, Debug)]
 pub struct Attribute {
     pub name: ConstantIndex,
     pub contents: Vec<u8>,
 }
 
+#[derive(PartialEq, Eq, Debug)]
 pub enum MethodHandleType {
     GetField(ConstantIndex),
     GetStatic(ConstantIndex),
