@@ -71,6 +71,11 @@ mod tests {
         assert_constant(Constant::Utf8("Some other string".to_string()), &"\x01\x00\x11Some other string");
     }
 
+    #[test]
+    fn test_deserialize_utf8_empty_string() {
+        assert_constant(Constant::Utf8("".to_string()), &"\x01\x00\x00");
+    }
+
     fn assert_constant(constant: Constant, input: &str) {
         assert_eq!(Ok(constant), Constant::deserialize(&mut bytes::Bytes::from(input).into_buf()));
     }
