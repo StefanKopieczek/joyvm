@@ -24,6 +24,8 @@ impl Deserialize for Constant {
             4 => deserialize_float(data),
             5 => deserialize_long(data),
             6 => deserialize_double(data),
+            7 => deserialize_classref(data),
+            8 => deserialize_string(data),
             _ => Err(ClassLoaderError::InvalidConstantType(tag)),
         }
     }
@@ -72,7 +74,27 @@ fn deserialize_long(data: &mut bytes::Buf) -> Result<Constant, ClassLoaderError>
 }
 
 fn deserialize_double(data: &mut bytes::Buf) -> Result<Constant, ClassLoaderError> {
+    if data.remaining() < 8 {
+        return Err(ClassLoaderError::Eof("Unexpected end of stream while parsing Double constant".to_string()));
+    }
+
     return Ok(Constant::Double(data.get_f64_be()));
+}
+
+fn deserialize_classref(data: &mut bytes::Buf) -> Result<Constant, ClassLoaderError> {
+    return deserialize_constant_index(data).map(Constant::ClassRef);
+}
+
+fn deserialize_string(data: &mut bytes::Buf) -> Result<Constant, ClassLoaderError> {
+    return deserialize_constant_index(data).map(Constant::StringRef);
+}
+
+fn deserialize_constant_index(data: &mut bytes::Buf) -> Result<ConstantIndex, ClassLoaderError> {
+    if data.remaining() < 2 {
+        return Err(ClassLoaderError::Eof("Unexpected end of stream while parsing constant index".to_string()));
+    }
+
+    return Ok(ConstantIndex(data.get_u16_be()));
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -482,6 +504,106 @@ mod tests {
             Constant::Double(ref double) => assert!(double.is_nan()),
             _ => panic!("Unexpected constant; expected double, got {:#?}", res),
         }
+    }
+
+    #[test]
+    fn test_deserialize_double_premature_termination_1() {
+        assert_eof_in_constant(b"\x06");
+    }
+
+    #[test]
+    fn test_deserialize_double_premature_termination_2() {
+        assert_eof_in_constant(b"\x06\x12");
+    }
+
+    #[test]
+    fn test_deserialize_double_premature_termination_3() {
+        assert_eof_in_constant(b"\x06\x12\x34");
+    }
+
+    #[test]
+    fn test_deserialize_double_premature_termination_4() {
+        assert_eof_in_constant(b"\x06\x12\x34\x56");
+    }
+
+    #[test]
+    fn test_deserialize_double_premature_termination_5() {
+        assert_eof_in_constant(b"\x06\x12\x34\x56\x78");
+    }
+
+    #[test]
+    fn test_deserialize_double_premature_termination_6() {
+        assert_eof_in_constant(b"\x06\x12\x34\x56\x78\x9a");
+    }
+
+    #[test]
+    fn test_deserialize_double_premature_termination_7() {
+        assert_eof_in_constant(b"\x06\x12\x34\x56\x78\x9a\xbc");
+    }
+
+    #[test]
+    fn test_deserialize_double_premature_termination_8() {
+        assert_eof_in_constant(b"\x06\x12\x34\x56\x78\x9a\xbc\xde");
+    }
+
+    #[test]
+    fn test_deserialize_class_with_name_index_0() {
+        assert_constant(Constant::ClassRef(ConstantIndex(0)), b"\x07\x00\x00");
+    }
+
+    #[test]
+    fn test_deserialize_class_with_name_index_1() {
+        assert_constant(Constant::ClassRef(ConstantIndex(1)), b"\x07\x00\x01");
+    }
+
+    #[test]
+    fn test_deserialize_class_with_name_index_abcd() {
+        assert_constant(Constant::ClassRef(ConstantIndex(0xabcd)), b"\x07\xab\xcd");
+    }
+
+    #[test]
+    fn test_deserialize_class_with_name_index_ffff() {
+        assert_constant(Constant::ClassRef(ConstantIndex(0xffff)), b"\x07\xff\xff");
+    }
+
+    #[test]
+    fn test_deserialize_class_premature_termination_1() {
+        assert_eof_in_constant(b"\x07");
+    }
+
+    #[test]
+    fn test_deserialize_class_premature_termination_2() {
+        assert_eof_in_constant(b"\x07\xab");
+    }
+
+    #[test]
+    fn test_deserialize_string_with_utf_index_0() {
+        assert_constant(Constant::StringRef(ConstantIndex(0)), b"\x08\x00\x00");
+    }
+
+    #[test]
+    fn test_deserialize_string_with_utf_index_1() {
+        assert_constant(Constant::StringRef(ConstantIndex(1)), b"\x08\x00\x01");
+    }
+
+    #[test]
+    fn test_deserialize_string_with_utf_index_abcd() {
+        assert_constant(Constant::StringRef(ConstantIndex(0xabcd)), b"\x08\xab\xcd");
+    }
+
+    #[test]
+    fn test_deserialize_string_with_utf_index_ffff() {
+        assert_constant(Constant::StringRef(ConstantIndex(0xffff)), b"\x08\xff\xff");
+    }
+
+    #[test]
+    fn test_deserialize_string_premature_termination_1() {
+        assert_eof_in_constant(b"\x08");
+    }
+
+    #[test]
+    fn test_deserialize_string_premature_termination_2() {
+        assert_eof_in_constant(b"\x08\x01");
     }
 
     fn do_float_test(float_bits: u32, input: &[u8]) {

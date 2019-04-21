@@ -13,10 +13,10 @@ pub struct Class {
 }
 
 #[derive(PartialEq, Eq, Debug)]
-pub struct ConstantIndex(u16);
+pub struct ConstantIndex(pub u16);
 
 #[derive(PartialEq, Eq, Debug)]
-pub struct MethodIndex(u16);
+pub struct MethodIndex(pub u16);
 
 #[derive(PartialEq, Debug)]
 pub enum Constant {
