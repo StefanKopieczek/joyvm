@@ -133,6 +133,46 @@ mod tests {
     }
 
     #[test]
+    fn test_deserialize_utf8_invalid_two_octet_sequence() {
+        assert_invalid_utf8(b"\x01\x00\x02\xc3\x28");
+    }
+
+    #[test]
+    fn test_deserialize_utf8_invalid_three_octet_sequence_1() {
+        assert_invalid_utf8(b"\x01\x00\x03\xe2\x28\xa1");
+    }
+
+    #[test]
+    fn test_deserialize_utf8_invalid_three_octet_sequence_2() {
+        assert_invalid_utf8(b"\x01\x00\x03\xe2\x82\x28");
+    }
+
+    #[test]
+    fn test_deserialize_utf8_invalid_four_octet_sequence_1() {
+        assert_invalid_utf8(b"\x01\x00\x04\xf0\x28\x8c\xbc");
+    }
+
+    #[test]
+    fn test_deserialize_utf8_invalid_four_octet_sequence_2() {
+        assert_invalid_utf8(b"\x01\x00\x04\xf0\x90\x28\xbc");
+    }
+
+    #[test]
+    fn test_deserialize_utf8_invalid_four_octet_sequence_3() {
+        assert_invalid_utf8(b"\x01\x00\x04\xf0\x28\x8c\x28");
+    }
+
+    #[test]
+    fn test_deserialize_utf8_five_octet_sequence() {
+        assert_invalid_utf8(b"\x01\x00\x05\xf8\xa1\xa1\xa1\xa1");
+    }
+
+    #[test]
+    fn test_deserialize_utf8_six_octet_sequence() {
+        assert_invalid_utf8(b"\x01\x00\x06\xfc\xa1\xa1\xa1\xa1\xa1");
+    }
+
+    #[test]
     fn test_deserialize_integer_0x00000000() {
         assert_constant(Constant::Integer(0x0000), b"\x03\x00\x00\x00\x00");
     }
@@ -174,7 +214,14 @@ mod tests {
     fn assert_eof_in_constant(input: &[u8]) {
         deserialize_constant_expecting_error(input, |err| match *err {
             ClassLoaderError::Eof(_) => (),
-            _ => panic!("Expected EOF, but got errpr {:#?}", err),
+            _ => panic!("Expected EOF, but got {:#?}", err),
+        });
+    }
+
+    fn assert_invalid_utf8(input: &[u8]) {
+        deserialize_constant_expecting_error(input, |err| match *err {
+            ClassLoaderError::Utf8(_) => (),
+            _ => panic!("Expected Utf8 parse error, but got {:#?}", err),
         });
     }
 
