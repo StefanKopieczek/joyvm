@@ -22,6 +22,7 @@ impl Deserialize for Constant {
             1 => deserialize_utf8(data),
             3 => deserialize_integer(data),
             4 => deserialize_float(data),
+            5 => deserialize_long(data),
             _ => Err(ClassLoaderError::InvalidConstantType(tag)),
         }
     }
@@ -59,6 +60,14 @@ fn deserialize_float(data: &mut bytes::Buf) -> Result<Constant, ClassLoaderError
     }
 
     return Ok(Constant::Float(data.get_f32_be()));
+}
+
+fn deserialize_long(data: &mut bytes::Buf) -> Result<Constant, ClassLoaderError> {
+    if data.remaining() < 8 {
+        return Err(ClassLoaderError::Eof("Unexpected end of stream while parsing Long constant".to_string()));
+    }
+
+    return Ok(Constant::Long(data.get_u64_be()));
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -326,6 +335,61 @@ mod tests {
     #[test]
     fn test_deserialize_float_premature_termination_4() {
         assert_eof_in_constant(b"\x04\x00\x00\x00");
+    }
+
+    #[test]
+    fn test_deserialize_long_0x0000000000000000() {
+        assert_constant(Constant::Long(0), b"\x05\x00\x00\x00\x00\x00\x00\x00\x00");
+    }
+
+    #[test]
+    fn test_deserialize_long_0x0000000000000001() {
+        assert_constant(Constant::Long(1), b"\x05\x00\x00\x00\x00\x00\x00\x00\x01");
+    }
+
+    #[test]
+    fn test_deserialize_long_0x123456789abcdef0() {
+        assert_constant(Constant::Long(0x123456789abcdef0), b"\x05\x12\x34\x56\x78\x9a\xbc\xde\xf0");
+    }
+
+    #[test]
+    fn test_deserialize_long_premature_termination_1() {
+        assert_eof_in_constant(b"\x05");
+    }
+
+    #[test]
+    fn test_deserialize_long_premature_termination_2() {
+        assert_eof_in_constant(b"\x05\x12");
+    }
+
+    #[test]
+    fn test_deserialize_long_premature_termination_3() {
+        assert_eof_in_constant(b"\x05\x12\x34");
+    }
+
+    #[test]
+    fn test_deserialize_long_premature_termination_4() {
+        assert_eof_in_constant(b"\x05\x12\x34\x56");
+    }
+
+    #[test]
+    fn test_deserialize_long_premature_termination_5() {
+        assert_eof_in_constant(b"\x05\x12\x34\x56\x78");
+    }
+
+    #[test]
+    fn test_deserialize_long_premature_termination_6() {
+        assert_eof_in_constant(b"\x05\x12\x34\x56\x78\x9a");
+    }
+
+    #[test]
+    fn test_deserialize_long_premature_termination_7() {
+        assert_eof_in_constant(b"\x05\x12\x34\x56\x78\x9a\xbc");
+    }
+
+    #[test]
+    fn test_deserialize_long_premature_termination_8() {
+        assert_eof_in_constant(b"\x05\x12\x34\x56\x78\x9a\xbc\xde");
     }
 
     fn do_float_test(float_bits: u32, input: &[u8]) {
