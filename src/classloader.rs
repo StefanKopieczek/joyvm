@@ -17,10 +17,12 @@ impl Deserialize for Constant {
             return Err(ClassLoaderError::Eof("Unexpected end of stream; expected constant tag".to_string()));
         }
 
-        // For now assume all constants are Utf8 literals.
-        // We'll add other constant types later.
-        data.advance(1);
-        return deserialize_utf8(data);
+        let tag = data.get_u8();
+        match tag {
+            1 => deserialize_utf8(data),
+            3 => deserialize_integer(data),
+            _ => Err(ClassLoaderError::InvalidConstantType(tag)),
+        }
     }
 }
 
@@ -42,10 +44,19 @@ fn deserialize_utf8(data: &mut bytes::Buf) -> Result<Constant, ClassLoaderError>
         .map_err(|err| ClassLoaderError::Utf8(err));
 }
 
+fn deserialize_integer(data: &mut bytes::Buf) -> Result<Constant, ClassLoaderError> {
+    if data.remaining() < 4 {
+        return Err(ClassLoaderError::Eof("Unexpected end of stream while parsing Integer constant".to_string()));
+    }
+
+    return Ok(Constant::Integer(data.get_u32_be()));
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum ClassLoaderError {
     Utf8(str::Utf8Error),
     Eof(String),
+    InvalidConstantType(u8),
 }
 
 impl fmt::Display for ClassLoaderError {
@@ -53,6 +64,7 @@ impl fmt::Display for ClassLoaderError {
         match *self {
             ClassLoaderError::Utf8(ref cause) => write!(f, "Failed to decode UTF-8: {}", cause),
             ClassLoaderError::Eof(ref msg) => write!(f, "Unexpected EOF: {}", msg),
+            ClassLoaderError::InvalidConstantType(ref tag) => write!(f, "Unsupported constant type {}", tag),
         }
     }
 }
@@ -62,6 +74,7 @@ impl error::Error for ClassLoaderError {
         match *self {
             ClassLoaderError::Utf8(_) => "Failed to decode Utf8 data",
             ClassLoaderError::Eof(ref msg) => msg,
+            ClassLoaderError::InvalidConstantType(..) => "Unsupported constant type"
         }
     }
 
@@ -69,6 +82,7 @@ impl error::Error for ClassLoaderError {
         match *self {
             ClassLoaderError::Utf8(ref cause) => Some(cause),
             ClassLoaderError::Eof(..) => None,
+            ClassLoaderError::InvalidConstantType(..) => None,
         }
     }
 }
@@ -80,56 +94,91 @@ mod tests {
 
     #[test]
     fn test_deserialize_utf8() {
-        assert_constant(Constant::Utf8("Hello".to_string()), &"\x01\x00\x05Hello");
+        assert_constant(Constant::Utf8("Hello".to_string()), b"\x01\x00\x05Hello");
     }
 
     #[test]
     fn test_deserialize_utf8_2() {
-        assert_constant(Constant::Utf8("Some other string".to_string()), &"\x01\x00\x11Some other string");
+        assert_constant(Constant::Utf8("Some other string".to_string()), b"\x01\x00\x11Some other string");
     }
 
     #[test]
     fn test_deserialize_utf8_empty_string() {
-        assert_constant(Constant::Utf8("".to_string()), &"\x01\x00\x00");
+        assert_constant(Constant::Utf8("".to_string()), b"\x01\x00\x00");
     }
 
     #[test]
     fn test_deserialize_constant_empty_buffer() {
-        assert_eof_in_constant(&"");
+        assert_eof_in_constant(b"");
     }
 
     #[test]
     fn test_deserialize_utf8_premature_termination_after_tag() {
-        assert_eof_in_constant(&"\x01");
+        assert_eof_in_constant(b"\x01");
     }
 
     #[test]
     fn test_deserialize_utf8_premature_termination_after_first_length_byte() {
-        assert_eof_in_constant(&"\x01\x00");
+        assert_eof_in_constant(b"\x01\x00");
     }
 
     #[test]
     fn test_deserialize_utf8_premature_termination_before_body() {
-        assert_eof_in_constant(&"\x01\x00\x01");
+        assert_eof_in_constant(b"\x01\x00\x01");
     }
 
     #[test]
     fn test_deserialize_utf8_premature_termination_in_body() {
-        assert_eof_in_constant(&"\x01\x00\x20Hello world");
+        assert_eof_in_constant(b"\x01\x00\x20Hello world");
     }
 
-    fn assert_constant(constant: Constant, input: &str) {
+    #[test]
+    fn test_deserialize_integer_0x00000000() {
+        assert_constant(Constant::Integer(0x0000), b"\x03\x00\x00\x00\x00");
+    }
+
+    #[test]
+    fn test_deserialize_integer_0x00000001() {
+        assert_constant(Constant::Integer(0x0001), b"\x03\x00\x00\x00\x01");
+    }
+
+    #[test]
+    fn test_deserialize_integer_0x1234abcd() {
+        assert_constant(Constant::Integer(0x1234abcd), b"\x03\x12\x34\xab\xcd");
+    }
+
+    #[test]
+    fn test_deserialize_integer_premature_termination_1() {
+        assert_eof_in_constant(b"\x03");
+    }
+
+    #[test]
+    fn test_deserialize_integer_premature_termination_2() {
+        assert_eof_in_constant(b"\x03\xff");
+    }
+
+    #[test]
+    fn test_deserialize_integer_premature_termination_3() {
+        assert_eof_in_constant(b"\x03\xff\xff");
+    }
+
+    #[test]
+    fn test_deserialize_integer_premature_termination_4() {
+        assert_eof_in_constant(b"\x03\xff\xff\xff");
+    }
+
+    fn assert_constant(constant: Constant, input: &[u8]) {
         assert_eq!(Ok(constant), Constant::deserialize(&mut bytes::Bytes::from(input).into_buf()));
     }
 
-    fn assert_eof_in_constant(input: &str) {
+    fn assert_eof_in_constant(input: &[u8]) {
         deserialize_constant_expecting_error(input, |err| match *err {
             ClassLoaderError::Eof(_) => (),
             _ => panic!("Expected EOF, but got errpr {:#?}", err),
         });
     }
 
-    fn deserialize_constant_expecting_error<F>(input: &str, handler: F) where
+    fn deserialize_constant_expecting_error<F>(input: &[u8], handler: F) where
         F: Fn(&ClassLoaderError) {
         let res = Constant::deserialize(&mut bytes::Bytes::from(input).into_buf());
         match res {
