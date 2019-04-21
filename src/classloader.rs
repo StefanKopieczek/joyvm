@@ -23,6 +23,7 @@ impl Deserialize for Constant {
             3 => deserialize_integer(data),
             4 => deserialize_float(data),
             5 => deserialize_long(data),
+            6 => deserialize_double(data),
             _ => Err(ClassLoaderError::InvalidConstantType(tag)),
         }
     }
@@ -68,6 +69,10 @@ fn deserialize_long(data: &mut bytes::Buf) -> Result<Constant, ClassLoaderError>
     }
 
     return Ok(Constant::Long(data.get_u64_be()));
+}
+
+fn deserialize_double(data: &mut bytes::Buf) -> Result<Constant, ClassLoaderError> {
+    return Ok(Constant::Double(data.get_f64_be()));
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -299,7 +304,8 @@ mod tests {
     fn test_deserialize_float_qnan() {
         // NaN != NaN so we have to check the result directly
         let bytes: &[u8] = b"\x04\xff\xc0\x00\x01";
-        let result = Constant::deserialize(&mut bytes::Bytes::from(bytes).into_buf()).unwrap();
+        let result = Constant::deserialize(&mut bytes::Bytes::from(bytes).into_buf())
+            .expect("Failed to parse serialized float constant");
         match result {
             Constant::Float(ref float) => assert!(float.is_nan()),
             _ => panic!("Expected float; got unexpected constant {:#?}", result),
@@ -392,8 +398,98 @@ mod tests {
         assert_eof_in_constant(b"\x05\x12\x34\x56\x78\x9a\xbc\xde");
     }
 
+    #[test]
+    fn test_deserialize_double_equal_to_1() {
+        do_double_test(0x3FF0000000000000, b"\x06\x3f\xf0\x00\x00\x00\x00\x00\x00");
+    }
+
+    #[test]
+    fn test_deserialize_double_smallest_number_greater_than_1() {
+        do_double_test(0x3FF0000000000001, b"\x06\x3f\xf0\x00\x00\x00\x00\x00\x01");
+    }
+
+    #[test]
+    fn test_deserialize_double_equal_to_2() {
+        do_double_test(0x4000000000000000, b"\x06\x40\x00\x00\x00\x00\x00\x00\x00");
+    }
+
+    #[test]
+    fn test_deserialize_double_equal_to_negative_2() {
+        do_double_test(0xc000000000000000, b"\x06\xc0\x00\x00\x00\x00\x00\x00\x00");
+    }
+
+    #[test]
+    fn test_deserialize_double_approx_one_third() {
+        do_double_test(0x3fd5555555555555, b"\x06\x3f\xd5\x55\x55\x55\x55\x55\x55");
+    }
+
+    #[test]
+    fn test_deserialize_double_approx_pi() {
+        do_double_test(0x400921fb54442d18, b"\x06\x40\x09\x21\xfb\x54\x44\x2d\x18");
+    }
+
+    #[test]
+    fn test_deserialize_double_positive_zero() {
+        do_double_test(0, b"\x06\x00\x00\x00\x00\x00\x00\x00\x00");
+    }
+
+    #[test]
+    fn test_deserialize_double_negative_zero() {
+        do_double_test(0x8000000000000000, b"\x06\x80\x00\x00\x00\x00\x00\x00\x00");
+    }
+
+    #[test]
+    fn test_deserialize_double_positive_infinity() {
+        do_double_test(0x7ff0000000000000, b"\x06\x7f\xf0\x00\x00\x00\x00\x00\x00");
+    }
+
+    #[test]
+    fn test_deserialize_double_negative_infinity() {
+        do_double_test(0xfff0000000000000, b"\x06\xff\xf0\x00\x00\x00\x00\x00\x00");
+    }
+
+    #[test]
+    fn test_deserialize_double_snan() {
+        // NaN != NaN so we have to check the result directly
+        let bytes: &[u8] = b"\x06\x7f\xff\x00\x00\x00\x00\x00\x00\x00\x01";
+        let res = Constant::deserialize(&mut bytes::Bytes::from(bytes).into_buf())
+            .expect("Failed to parse serialized double constant");
+        match res {
+            Constant::Double(ref double) => assert!(double.is_nan()),
+            _ => panic!("Unexpected constant; expected double, got {:#?}", res),
+        }
+    }
+
+    #[test]
+    fn test_deserialize_double_qnan() {
+        // NaN != NaN so we have to check the result directly
+        let bytes: &[u8] = b"\x06\x7f\xff\x80\x00\x00\x00\x00\x00\x00\x01";
+        let res = Constant::deserialize(&mut bytes::Bytes::from(bytes).into_buf())
+            .expect("Failed to parse serialized double constant");
+        match res {
+            Constant::Double(ref double) => assert!(double.is_nan()),
+            _ => panic!("Unexpected constant; expected double, got {:#?}", res),
+        }
+    }
+
+    #[test]
+    fn test_deserialize_double_alt_nan() {
+        // NaN != NaN so we have to check the result directly
+        let bytes: &[u8] = b"\x06\x7f\xff\xff\xff\xff\xff\xff\xff";
+        let res = Constant::deserialize(&mut bytes::Bytes::from(bytes).into_buf())
+            .expect("Failed to parse serialized double constant");
+        match res {
+            Constant::Double(ref double) => assert!(double.is_nan()),
+            _ => panic!("Unexpected constant; expected double, got {:#?}", res),
+        }
+    }
+
     fn do_float_test(float_bits: u32, input: &[u8]) {
         assert_constant(Constant::Float(f32::from_bits(float_bits)), input);
+    }
+
+    fn do_double_test(double_bits: u64, input: &[u8]) {
+        assert_constant(Constant::Double(f64::from_bits(double_bits)), input);
     }
 
     fn assert_constant(constant: Constant, input: &[u8]) {
