@@ -26,6 +26,7 @@ impl Deserialize for Constant {
             6 => deserialize_double(data),
             7 => deserialize_classref(data),
             8 => deserialize_string(data),
+            9 => deserialize_fieldref(data),
             _ => Err(ClassLoaderError::InvalidConstantType(tag)),
         }
     }
@@ -87,6 +88,12 @@ fn deserialize_classref(data: &mut bytes::Buf) -> Result<Constant, ClassLoaderEr
 
 fn deserialize_string(data: &mut bytes::Buf) -> Result<Constant, ClassLoaderError> {
     return deserialize_constant_index(data).map(Constant::StringRef);
+}
+
+fn deserialize_fieldref(data: &mut bytes::Buf) -> Result<Constant, ClassLoaderError> {
+    let class = deserialize_constant_index(data)?;
+    let name_and_type = deserialize_constant_index(data)?;
+    return Ok(Constant::FieldRef {class: class, name_and_type: name_and_type});
 }
 
 fn deserialize_constant_index(data: &mut bytes::Buf) -> Result<ConstantIndex, ClassLoaderError> {
@@ -604,6 +611,42 @@ mod tests {
     #[test]
     fn test_deserialize_string_premature_termination_2() {
         assert_eof_in_constant(b"\x08\x01");
+    }
+
+    #[test]
+    fn test_deserialize_field_info_with_0000_and_0000() {
+        assert_constant(Constant::FieldRef {
+            class: ConstantIndex(0),
+            name_and_type: ConstantIndex(0),
+        }, b"\x09\x00\x00\x00\x00");
+    }
+
+    #[test]
+    fn test_deserialize_field_info_with_abcd_and_1234() {
+        assert_constant(Constant::FieldRef {
+            class: ConstantIndex(0xabcd),
+            name_and_type: ConstantIndex(0x1234),
+        }, b"\x09\xab\xcd\x12\x34");
+    }
+
+    #[test]
+    fn test_deserialize_field_info_premature_termination_1() {
+        assert_eof_in_constant(b"\x09");
+    }
+
+    #[test]
+    fn test_deserialize_field_info_premature_termination_2() {
+        assert_eof_in_constant(b"\x09\x00");
+    }
+
+    #[test]
+    fn test_deserialize_field_info_premature_termination_3() {
+        assert_eof_in_constant(b"\x09\x00\x00");
+    }
+
+    #[test]
+    fn test_deserialize_field_info_premature_termination_4() {
+        assert_eof_in_constant(b"\x09\x00\x00\x00");
     }
 
     fn do_float_test(float_bits: u32, input: &[u8]) {
