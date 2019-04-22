@@ -27,6 +27,8 @@ impl Deserialize for Constant {
             7 => deserialize_classref(data),
             8 => deserialize_string(data),
             9 => deserialize_fieldref(data),
+            10 => deserialize_methodref(data),
+            11 => deserialize_interface_method_ref(data),
             _ => Err(ClassLoaderError::InvalidConstantType(tag)),
         }
     }
@@ -94,6 +96,18 @@ fn deserialize_fieldref(data: &mut bytes::Buf) -> Result<Constant, ClassLoaderEr
     let class = deserialize_constant_index(data)?;
     let name_and_type = deserialize_constant_index(data)?;
     return Ok(Constant::FieldRef {class: class, name_and_type: name_and_type});
+}
+
+fn deserialize_methodref(data: &mut bytes::Buf) -> Result<Constant, ClassLoaderError> {
+    let class = deserialize_constant_index(data)?;
+    let name_and_type = deserialize_constant_index(data)?;
+    return Ok(Constant::MethodRef {class: class, name_and_type: name_and_type});
+}
+
+fn deserialize_interface_method_ref(data: &mut bytes::Buf) -> Result<Constant, ClassLoaderError> {
+    let class = deserialize_constant_index(data)?;
+    let name_and_type = deserialize_constant_index(data)?;
+    return Ok(Constant::InterfaceMethodRef {class: class, name_and_type: name_and_type});
 }
 
 fn deserialize_constant_index(data: &mut bytes::Buf) -> Result<ConstantIndex, ClassLoaderError> {
@@ -614,7 +628,7 @@ mod tests {
     }
 
     #[test]
-    fn test_deserialize_field_info_with_0000_and_0000() {
+    fn test_deserialize_field_ref_with_0000_and_0000() {
         assert_constant(Constant::FieldRef {
             class: ConstantIndex(0),
             name_and_type: ConstantIndex(0),
@@ -622,7 +636,7 @@ mod tests {
     }
 
     #[test]
-    fn test_deserialize_field_info_with_abcd_and_1234() {
+    fn test_deserialize_field_ref_with_abcd_and_1234() {
         assert_constant(Constant::FieldRef {
             class: ConstantIndex(0xabcd),
             name_and_type: ConstantIndex(0x1234),
@@ -630,23 +644,95 @@ mod tests {
     }
 
     #[test]
-    fn test_deserialize_field_info_premature_termination_1() {
+    fn test_deserialize_field_ref_premature_termination_1() {
         assert_eof_in_constant(b"\x09");
     }
 
     #[test]
-    fn test_deserialize_field_info_premature_termination_2() {
+    fn test_deserialize_field_ref_premature_termination_2() {
         assert_eof_in_constant(b"\x09\x00");
     }
 
     #[test]
-    fn test_deserialize_field_info_premature_termination_3() {
+    fn test_deserialize_field_ref_premature_termination_3() {
         assert_eof_in_constant(b"\x09\x00\x00");
     }
 
     #[test]
-    fn test_deserialize_field_info_premature_termination_4() {
+    fn test_deserialize_field_ref_premature_termination_4() {
         assert_eof_in_constant(b"\x09\x00\x00\x00");
+    }
+
+    #[test]
+    fn test_deserialize_method_ref_with_0000_and_0000() {
+        assert_constant(Constant::MethodRef {
+            class: ConstantIndex(0),
+            name_and_type: ConstantIndex(0),
+        }, b"\x0a\x00\x00\x00\x00");
+    }
+
+    #[test]
+    fn test_deserialize_method_ref_with_abcd_and_1234() {
+        assert_constant(Constant::MethodRef {
+            class: ConstantIndex(0xabcd),
+            name_and_type: ConstantIndex(0x1234),
+        }, b"\x0a\xab\xcd\x12\x34");
+    }
+
+    #[test]
+    fn test_deserialize_method_ref_premature_termination_1() {
+        assert_eof_in_constant(b"\x0a");
+    }
+
+    #[test]
+    fn test_deserialize_method_ref_premature_termination_2() {
+        assert_eof_in_constant(b"\x0a\x00");
+    }
+
+    #[test]
+    fn test_deserialize_method_ref_premature_termination_3() {
+        assert_eof_in_constant(b"\x0a\x00\x00");
+    }
+
+    #[test]
+    fn test_deserialize_method_ref_premature_termination_4() {
+        assert_eof_in_constant(b"\x0a\x00\x00\x00");
+    }
+
+    #[test]
+    fn test_deserialize_interface_method_ref_with_0000_and_0000() {
+        assert_constant(Constant::InterfaceMethodRef {
+            class: ConstantIndex(0),
+            name_and_type: ConstantIndex(0),
+        }, b"\x0b\x00\x00\x00\x00");
+    }
+
+    #[test]
+    fn test_deserialize_interface_method_ref_with_abcd_and_1234() {
+        assert_constant(Constant::InterfaceMethodRef {
+            class: ConstantIndex(0xabcd),
+            name_and_type: ConstantIndex(0x1234),
+        }, b"\x0b\xab\xcd\x12\x34");
+    }
+
+    #[test]
+    fn test_deserialize_interface_method_ref_premature_termination_1() {
+        assert_eof_in_constant(b"\x0b");
+    }
+
+    #[test]
+    fn test_deserialize_interface_method_ref_premature_termination_2() {
+        assert_eof_in_constant(b"\x0b\x00");
+    }
+
+    #[test]
+    fn test_deserialize_interface_method_ref_premature_termination_3() {
+        assert_eof_in_constant(b"\x0b\x00\x00");
+    }
+
+    #[test]
+    fn test_deserialize_interface_method_ref_premature_termination_4() {
+        assert_eof_in_constant(b"\x0b\x00\x00\x00");
     }
 
     fn do_float_test(float_bits: u32, input: &[u8]) {
