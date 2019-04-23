@@ -31,6 +31,7 @@ impl Deserialize for Constant {
             11 => deserialize_interface_method_ref(data),
             15 => deserialize_method_handle_ref(data),
             16 => deserialize_method_type(data),
+            18 => deserialize_invoke_dynamic_info(data),
             _ => Err(ClassLoaderError::InvalidConstantType(tag)),
         }
     }
@@ -139,12 +140,27 @@ fn deserialize_method_type(data: &mut bytes::Buf) -> Result<Constant, ClassLoade
     return Ok(Constant::MethodType(deserialize_constant_index(data)?));
 }
 
+fn deserialize_invoke_dynamic_info(data: &mut bytes::Buf) -> Result<Constant, ClassLoaderError> {
+    return Ok(Constant::InvokeDynamicInfo{
+        bootstrap_method_attr: deserialize_method_index(data)?,
+        name_and_type: deserialize_constant_index(data)?,
+    });
+}
+
 fn deserialize_constant_index(data: &mut bytes::Buf) -> Result<ConstantIndex, ClassLoaderError> {
     if data.remaining() < 2 {
         return Err(ClassLoaderError::Eof("Unexpected end of stream while parsing constant index".to_string()));
     }
 
     return Ok(ConstantIndex(data.get_u16_be()));
+}
+
+fn deserialize_method_index(data: &mut bytes::Buf) -> Result<MethodIndex, ClassLoaderError> {
+    if data.remaining() < 2 {
+        return Err(ClassLoaderError::Eof("Unexpected end of stream while parsing method index".to_string()));
+    }
+
+    return Ok(MethodIndex(data.get_u16_be()));
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -885,6 +901,42 @@ mod tests {
     #[test]
     fn test_deserialize_method_type_premature_termination_2() {
         assert_eof_in_constant(b"\x10\x5b");
+    }
+
+    #[test]
+    fn test_deserialize_invoke_dynamic_info_with_indexes_0000_and_0000() {
+        assert_constant(Constant::InvokeDynamicInfo {
+            bootstrap_method_attr: MethodIndex(0),
+            name_and_type: ConstantIndex(0),
+        }, b"\x12\x00\x00\x00\x00");
+    }
+
+    #[test]
+    fn test_deserialize_invoke_dynamic_info_with_indexes_abcd_and_1234() {
+        assert_constant(Constant::InvokeDynamicInfo {
+            bootstrap_method_attr: MethodIndex(0xabcd),
+            name_and_type: ConstantIndex(0x1234),
+        }, b"\x12\xab\xcd\x12\x34");
+    }
+
+    #[test]
+    fn test_deserialize_invoke_dynamic_info_premature_termination_1() {
+        assert_eof_in_constant(b"\x12");
+    }
+
+    #[test]
+    fn test_deserialize_invoke_dynamic_info_premature_termination_2() {
+        assert_eof_in_constant(b"\x12\x12");
+    }
+
+    #[test]
+    fn test_deserialize_invoke_dynamic_info_premature_termination_3() {
+        assert_eof_in_constant(b"\x12\x12\x34");
+    }
+
+    #[test]
+    fn test_deserialize_invoke_dynamic_info_premature_termination_4() {
+        assert_eof_in_constant(b"\x12\x12\x34\x56");
     }
 
     fn do_float_test(float_bits: u32, input: &[u8]) {
