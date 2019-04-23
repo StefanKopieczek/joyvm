@@ -12,6 +12,8 @@ Cargo.lock
 # Ignore all swapfiles
 *.sw[po]
 
+#Ignore .DS_Store
+.DS_Store
 
 #Added by cargo
 #
