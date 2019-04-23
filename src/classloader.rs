@@ -30,6 +30,7 @@ impl Deserialize for Constant {
             10 => deserialize_methodref(data),
             11 => deserialize_interface_method_ref(data),
             15 => deserialize_method_handle_ref(data),
+            16 => deserialize_method_type(data),
             _ => Err(ClassLoaderError::InvalidConstantType(tag)),
         }
     }
@@ -132,6 +133,10 @@ fn deserialize_method_handle_ref(data: &mut bytes::Buf) -> Result<Constant, Clas
     };
 
     return handle.map(|h| Constant::MethodHandleRef(h));
+}
+
+fn deserialize_method_type(data: &mut bytes::Buf) -> Result<Constant, ClassLoaderError> {
+    return Ok(Constant::MethodType(deserialize_constant_index(data)?));
 }
 
 fn deserialize_constant_index(data: &mut bytes::Buf) -> Result<ConstantIndex, ClassLoaderError> {
@@ -855,6 +860,31 @@ mod tests {
             ClassLoaderError::InvalidMethodHandleKind(kind) => assert_eq!(0x00, kind),
             _ => panic!("Expected InvalidMethodHandleKind, but got {:#?}", err)
         });
+    }
+
+    #[test]
+    fn test_deserialize_method_type_with_index_0x0000() {
+        assert_constant(Constant::MethodType(ConstantIndex(0x0000)), b"\x10\x00\x00");
+    }
+
+    #[test]
+    fn test_deserialize_method_type_with_index_0x1234() {
+        assert_constant(Constant::MethodType(ConstantIndex(0x1234)), b"\x10\x12\x34");
+    }
+
+    #[test]
+    fn test_deserialize_method_type_with_index_0xffff() {
+        assert_constant(Constant::MethodType(ConstantIndex(0xffff)), b"\x10\xff\xff");
+    }
+
+    #[test]
+    fn test_deserialize_method_type_premature_termination_1() {
+        assert_eof_in_constant(b"\x10");
+    }
+
+    #[test]
+    fn test_deserialize_method_type_premature_termination_2() {
+        assert_eof_in_constant(b"\x10\x5b");
     }
 
     fn do_float_test(float_bits: u32, input: &[u8]) {
