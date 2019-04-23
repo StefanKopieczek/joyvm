@@ -31,7 +31,7 @@ pub enum Constant {
     MethodRef{class:ConstantIndex, name_and_type:ConstantIndex},
     InterfaceMethodRef{class:ConstantIndex, name_and_type:ConstantIndex},
     NameAndTypeRef{name:ConstantIndex, descriptor:ConstantIndex},
-    MethodHandle(MethodHandleType),
+    MethodHandleRef(MethodHandle),
     MethodType(ConstantIndex),
     InvokeDynamicInfo{bootstrap_method_attr:MethodIndex, name_and_type:ConstantIndex},
     Dummy, // Necessary to fake Long and Double taking up two slots
@@ -51,7 +51,7 @@ impl Constant {
             Constant::MethodRef{..} => Some(10),
             Constant::InterfaceMethodRef{..} => Some(11),
             Constant::NameAndTypeRef{..} => Some(12),
-            Constant::MethodHandle(_) => Some(15),
+            Constant::MethodHandleRef(_) => Some(15),
             Constant::MethodType(_) => Some(16),
             Constant::InvokeDynamicInfo{..} => Some(18),
             Constant::Dummy => None,
@@ -126,7 +126,7 @@ pub struct Attribute {
 }
 
 #[derive(PartialEq, Eq, Debug)]
-pub enum MethodHandleType {
+pub enum MethodHandle {
     GetField(ConstantIndex),
     GetStatic(ConstantIndex),
     PutField(ConstantIndex),

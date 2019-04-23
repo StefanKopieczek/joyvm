@@ -29,6 +29,7 @@ impl Deserialize for Constant {
             9 => deserialize_fieldref(data),
             10 => deserialize_methodref(data),
             11 => deserialize_interface_method_ref(data),
+            15 => deserialize_method_handle_ref(data),
             _ => Err(ClassLoaderError::InvalidConstantType(tag)),
         }
     }
@@ -110,6 +111,29 @@ fn deserialize_interface_method_ref(data: &mut bytes::Buf) -> Result<Constant, C
     return Ok(Constant::InterfaceMethodRef {class: class, name_and_type: name_and_type});
 }
 
+fn deserialize_method_handle_ref(data: &mut bytes::Buf) -> Result<Constant, ClassLoaderError> {
+    if data.remaining() == 0 {
+        return Err(ClassLoaderError::Eof("Unexpected end of stream while parsing method handle ref".to_string()));
+    }
+
+    let kind = data.get_u8();
+    let index = deserialize_constant_index(data)?;
+    let handle = match kind {
+        1 => Ok(MethodHandle::GetField(index)),
+        2 => Ok(MethodHandle::GetStatic(index)),
+        3 => Ok(MethodHandle::PutField(index)),
+        4 => Ok(MethodHandle::PutStatic(index)),
+        5 => Ok(MethodHandle::InvokeVirtual(index)),
+        6 => Ok(MethodHandle::InvokeStatic(index)),
+        7 => Ok(MethodHandle::InvokeSpecial(index)),
+        8 => Ok(MethodHandle::NewInvokeSpecial(index)),
+        9 => Ok(MethodHandle::InvokeInterface(index)),
+        _ => Err(ClassLoaderError::InvalidMethodHandleKind(kind)),
+    };
+
+    return handle.map(|h| Constant::MethodHandleRef(h));
+}
+
 fn deserialize_constant_index(data: &mut bytes::Buf) -> Result<ConstantIndex, ClassLoaderError> {
     if data.remaining() < 2 {
         return Err(ClassLoaderError::Eof("Unexpected end of stream while parsing constant index".to_string()));
@@ -123,6 +147,7 @@ pub enum ClassLoaderError {
     Utf8(str::Utf8Error),
     Eof(String),
     InvalidConstantType(u8),
+    InvalidMethodHandleKind(u8),
 }
 
 impl fmt::Display for ClassLoaderError {
@@ -131,6 +156,7 @@ impl fmt::Display for ClassLoaderError {
             ClassLoaderError::Utf8(ref cause) => write!(f, "Failed to decode UTF-8: {}", cause),
             ClassLoaderError::Eof(ref msg) => write!(f, "Unexpected EOF: {}", msg),
             ClassLoaderError::InvalidConstantType(ref tag) => write!(f, "Unsupported constant type {}", tag),
+            ClassLoaderError::InvalidMethodHandleKind(ref kind) => write!(f, "Unsupported method handle kind {}", kind),
         }
     }
 }
@@ -140,7 +166,8 @@ impl error::Error for ClassLoaderError {
         match *self {
             ClassLoaderError::Utf8(_) => "Failed to decode Utf8 data",
             ClassLoaderError::Eof(ref msg) => msg,
-            ClassLoaderError::InvalidConstantType(..) => "Unsupported constant type"
+            ClassLoaderError::InvalidConstantType(..) => "Unsupported constant type",
+            ClassLoaderError::InvalidMethodHandleKind(..) => "Unsupported method handle kind",
         }
     }
 
@@ -149,6 +176,7 @@ impl error::Error for ClassLoaderError {
             ClassLoaderError::Utf8(ref cause) => Some(cause),
             ClassLoaderError::Eof(..) => None,
             ClassLoaderError::InvalidConstantType(..) => None,
+            ClassLoaderError::InvalidMethodHandleKind(..) => None,
         }
     }
 }
@@ -735,12 +763,110 @@ mod tests {
         assert_eof_in_constant(b"\x0b\x00\x00\x00");
     }
 
+    #[test]
+    fn test_deserialize_method_handle_of_type_get_field() {
+        assert_method_handle(MethodHandle::GetField(ConstantIndex(0x1234)), b"\x0f\x01\x12\x34");
+    }
+
+    #[test]
+    fn test_deserialize_method_handle_of_type_get_static() {
+        assert_method_handle(MethodHandle::GetStatic(ConstantIndex(0x1f2b)), b"\x0f\x02\x1f\x2b");
+    }
+
+    #[test]
+    fn test_deserialize_method_handle_of_type_put_field() {
+        assert_method_handle(MethodHandle::PutField(ConstantIndex(0x1789)), b"\x0f\x03\x17\x89");
+    }
+
+    #[test]
+    fn test_deserialize_method_handle_of_type_put_static() {
+        assert_method_handle(MethodHandle::PutStatic(ConstantIndex(0xabcd)), b"\x0f\x04\xab\xcd");
+    }
+
+    #[test]
+    fn test_deserialize_method_handle_of_type_invoke_virtual() {
+        assert_method_handle(MethodHandle::InvokeVirtual(ConstantIndex(0x1337)), b"\x0f\x05\x13\x37");
+    }
+
+    #[test]
+    fn test_deserialize_method_handle_of_type_invoke_static() {
+        assert_method_handle(MethodHandle::InvokeStatic(ConstantIndex(0x8fc0)), b"\x0f\x06\x8f\xc0");
+    }
+
+    #[test]
+    fn test_deserialize_method_handle_of_type_invoke_special() {
+        assert_method_handle(MethodHandle::InvokeSpecial(ConstantIndex(0xcafe)), b"\x0f\x07\xca\xfe");
+    }
+
+    #[test]
+    fn test_deserialize_method_handle_of_type_new_invoke_special() {
+        assert_method_handle(MethodHandle::NewInvokeSpecial(ConstantIndex(0xbabe)), b"\x0f\x08\xba\xbe");
+    }
+
+    #[test]
+    fn test_deserialize_method_handle_of_type_invoke_interface() {
+        assert_method_handle(MethodHandle::InvokeInterface(ConstantIndex(0xbeef)), b"\x0f\x09\xbe\xef");
+    }
+
+    #[test]
+    fn test_deserialize_method_handle_premature_termination_1() {
+        assert_eof_in_constant(b"\x0f");
+    }
+
+    #[test]
+    fn test_deserialize_method_handle_premature_termination_2_put_static() {
+        assert_eof_in_constant(b"\x0f\x04");
+    }
+
+    #[test]
+    fn test_deserialize_method_handle_premature_termination_2_invoke_virtual() {
+        assert_eof_in_constant(b"\x0f\x05");
+    }
+
+    #[test]
+    fn test_deserialize_method_handle_premature_termination_3_new_invoke_special() {
+        assert_eof_in_constant(b"\x0f\x08\xff");
+    }
+
+    #[test]
+    fn test_deserialize_method_handle_premature_termination_4_get_field() {
+        assert_eof_in_constant(b"\x0f\x01\xab");
+    }
+
+    #[test]
+    fn test_deserialize_method_handle_with_invalid_type_0x0a() {
+        deserialize_constant_expecting_error(b"\x0f\x0a\xab\xcd", |err| match *err {
+            ClassLoaderError::InvalidMethodHandleKind(kind) => assert_eq!(0x0a, kind),
+            _ => panic!("Expected InvalidMethodHandleKind, but got {:#?}", err)
+        });
+    }
+
+    #[test]
+    fn test_deserialize_method_handle_with_invalid_type_0xff() {
+        deserialize_constant_expecting_error(b"\x0f\xff\x12\x34", |err| match *err {
+            ClassLoaderError::InvalidMethodHandleKind(kind) => assert_eq!(0xff, kind),
+            _ => panic!("Expected InvalidMethodHandleKind, but got {:#?}", err)
+        });
+    }
+
+    #[test]
+    fn test_deserialize_method_handle_with_invalid_type_0x00() {
+        deserialize_constant_expecting_error(b"\x0f\x00\x13\xf7", |err| match *err {
+            ClassLoaderError::InvalidMethodHandleKind(kind) => assert_eq!(0x00, kind),
+            _ => panic!("Expected InvalidMethodHandleKind, but got {:#?}", err)
+        });
+    }
+
     fn do_float_test(float_bits: u32, input: &[u8]) {
         assert_constant(Constant::Float(f32::from_bits(float_bits)), input);
     }
 
     fn do_double_test(double_bits: u64, input: &[u8]) {
         assert_constant(Constant::Double(f64::from_bits(double_bits)), input);
+    }
+
+    fn assert_method_handle(handle: MethodHandle, input: &[u8]) {
+        assert_constant(Constant::MethodHandleRef(handle), input);
     }
 
     fn assert_constant(constant: Constant, input: &[u8]) {
