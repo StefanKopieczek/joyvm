@@ -198,53 +198,54 @@ impl error::Error for ClassLoaderError {
             ClassLoaderError::Eof(..) => None,
             ClassLoaderError::InvalidConstantType(..) => None,
             ClassLoaderError::InvalidMethodHandleKind(..) => None,
+            ClassLoaderError::Misc(..) => None,
         }
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use fmt::Debug;
 
     #[test]
     fn test_deserialize_utf8() {
-        assert_constant(Constant::Utf8("Hello".to_string()), b"\x01\x00\x05Hello");
+        assert_deserialize(Constant::Utf8("Hello".to_string()), b"\x01\x00\x05Hello");
     }
 
     #[test]
     fn test_deserialize_utf8_2() {
-        assert_constant(Constant::Utf8("Some other string".to_string()), b"\x01\x00\x11Some other string");
+        assert_deserialize(Constant::Utf8("Some other string".to_string()), b"\x01\x00\x11Some other string");
     }
 
     #[test]
     fn test_deserialize_utf8_empty_string() {
-        assert_constant(Constant::Utf8("".to_string()), b"\x01\x00\x00");
+        assert_deserialize(Constant::Utf8("".to_string()), b"\x01\x00\x00");
     }
 
     #[test]
     fn test_deserialize_constant_empty_buffer() {
-        assert_eof_in_constant(b"");
+        assert_eof(Constant::deserialize, b"");
     }
 
     #[test]
     fn test_deserialize_utf8_premature_termination_after_tag() {
-        assert_eof_in_constant(b"\x01");
+        assert_eof(Constant::deserialize, b"\x01");
     }
 
     #[test]
     fn test_deserialize_utf8_premature_termination_after_first_length_byte() {
-        assert_eof_in_constant(b"\x01\x00");
+        assert_eof(Constant::deserialize, b"\x01\x00");
     }
 
     #[test]
     fn test_deserialize_utf8_premature_termination_before_body() {
-        assert_eof_in_constant(b"\x01\x00\x01");
+        assert_eof(Constant::deserialize, b"\x01\x00\x01");
     }
 
     #[test]
     fn test_deserialize_utf8_premature_termination_in_body() {
-        assert_eof_in_constant(b"\x01\x00\x20Hello world");
+        assert_eof(Constant::deserialize, b"\x01\x00\x20Hello world");
     }
 
     #[test]
@@ -289,37 +290,37 @@ mod tests {
 
     #[test]
     fn test_deserialize_integer_0x00000000() {
-        assert_constant(Constant::Integer(0x0000), b"\x03\x00\x00\x00\x00");
+        assert_deserialize(Constant::Integer(0x0000), b"\x03\x00\x00\x00\x00");
     }
 
     #[test]
     fn test_deserialize_integer_0x00000001() {
-        assert_constant(Constant::Integer(0x0001), b"\x03\x00\x00\x00\x01");
+        assert_deserialize(Constant::Integer(0x0001), b"\x03\x00\x00\x00\x01");
     }
 
     #[test]
     fn test_deserialize_integer_0x1234abcd() {
-        assert_constant(Constant::Integer(0x1234abcd), b"\x03\x12\x34\xab\xcd");
+        assert_deserialize(Constant::Integer(0x1234abcd), b"\x03\x12\x34\xab\xcd");
     }
 
     #[test]
     fn test_deserialize_integer_premature_termination_1() {
-        assert_eof_in_constant(b"\x03");
+        assert_eof(Constant::deserialize, b"\x03");
     }
 
     #[test]
     fn test_deserialize_integer_premature_termination_2() {
-        assert_eof_in_constant(b"\x03\xff");
+        assert_eof(Constant::deserialize, b"\x03\xff");
     }
 
     #[test]
     fn test_deserialize_integer_premature_termination_3() {
-        assert_eof_in_constant(b"\x03\xff\xff");
+        assert_eof(Constant::deserialize, b"\x03\xff\xff");
     }
 
     #[test]
     fn test_deserialize_integer_premature_termination_4() {
-        assert_eof_in_constant(b"\x03\xff\xff\xff");
+        assert_eof(Constant::deserialize, b"\x03\xff\xff\xff");
     }
 
     #[test]
@@ -417,77 +418,77 @@ mod tests {
 
     #[test]
     fn test_deserialize_float_premature_termination_1() {
-        assert_eof_in_constant(b"\x04");
+        assert_eof(Constant::deserialize, b"\x04");
     }
 
     #[test]
     fn test_deserialize_float_premature_termination_2() {
-        assert_eof_in_constant(b"\x04\x00");
+        assert_eof(Constant::deserialize, b"\x04\x00");
     }
 
     #[test]
     fn test_deserialize_float_premature_termination_3() {
-        assert_eof_in_constant(b"\x04\x00\x00");
+        assert_eof(Constant::deserialize, b"\x04\x00\x00");
     }
 
     #[test]
     fn test_deserialize_float_premature_termination_4() {
-        assert_eof_in_constant(b"\x04\x00\x00\x00");
+        assert_eof(Constant::deserialize, b"\x04\x00\x00\x00");
     }
 
     #[test]
     fn test_deserialize_long_0x0000000000000000() {
-        assert_constant(Constant::Long(0), b"\x05\x00\x00\x00\x00\x00\x00\x00\x00");
+        assert_deserialize(Constant::Long(0), b"\x05\x00\x00\x00\x00\x00\x00\x00\x00");
     }
 
     #[test]
     fn test_deserialize_long_0x0000000000000001() {
-        assert_constant(Constant::Long(1), b"\x05\x00\x00\x00\x00\x00\x00\x00\x01");
+        assert_deserialize(Constant::Long(1), b"\x05\x00\x00\x00\x00\x00\x00\x00\x01");
     }
 
     #[test]
     fn test_deserialize_long_0x123456789abcdef0() {
-        assert_constant(Constant::Long(0x123456789abcdef0), b"\x05\x12\x34\x56\x78\x9a\xbc\xde\xf0");
+        assert_deserialize(Constant::Long(0x123456789abcdef0), b"\x05\x12\x34\x56\x78\x9a\xbc\xde\xf0");
     }
 
     #[test]
     fn test_deserialize_long_premature_termination_1() {
-        assert_eof_in_constant(b"\x05");
+        assert_eof(Constant::deserialize, b"\x05");
     }
 
     #[test]
     fn test_deserialize_long_premature_termination_2() {
-        assert_eof_in_constant(b"\x05\x12");
+        assert_eof(Constant::deserialize, b"\x05\x12");
     }
 
     #[test]
     fn test_deserialize_long_premature_termination_3() {
-        assert_eof_in_constant(b"\x05\x12\x34");
+        assert_eof(Constant::deserialize, b"\x05\x12\x34");
     }
 
     #[test]
     fn test_deserialize_long_premature_termination_4() {
-        assert_eof_in_constant(b"\x05\x12\x34\x56");
+        assert_eof(Constant::deserialize, b"\x05\x12\x34\x56");
     }
 
     #[test]
     fn test_deserialize_long_premature_termination_5() {
-        assert_eof_in_constant(b"\x05\x12\x34\x56\x78");
+        assert_eof(Constant::deserialize, b"\x05\x12\x34\x56\x78");
     }
 
     #[test]
     fn test_deserialize_long_premature_termination_6() {
-        assert_eof_in_constant(b"\x05\x12\x34\x56\x78\x9a");
+        assert_eof(Constant::deserialize, b"\x05\x12\x34\x56\x78\x9a");
     }
 
     #[test]
     fn test_deserialize_long_premature_termination_7() {
-        assert_eof_in_constant(b"\x05\x12\x34\x56\x78\x9a\xbc");
+        assert_eof(Constant::deserialize, b"\x05\x12\x34\x56\x78\x9a\xbc");
     }
 
     #[test]
     fn test_deserialize_long_premature_termination_8() {
-        assert_eof_in_constant(b"\x05\x12\x34\x56\x78\x9a\xbc\xde");
+        assert_eof(Constant::deserialize, b"\x05\x12\x34\x56\x78\x9a\xbc\xde");
     }
 
     #[test]
@@ -578,107 +579,107 @@ mod tests {
 
     #[test]
     fn test_deserialize_double_premature_termination_1() {
-        assert_eof_in_constant(b"\x06");
+        assert_eof(Constant::deserialize, b"\x06");
     }
 
     #[test]
     fn test_deserialize_double_premature_termination_2() {
-        assert_eof_in_constant(b"\x06\x12");
+        assert_eof(Constant::deserialize, b"\x06\x12");
     }
 
     #[test]
     fn test_deserialize_double_premature_termination_3() {
-        assert_eof_in_constant(b"\x06\x12\x34");
+        assert_eof(Constant::deserialize, b"\x06\x12\x34");
     }
 
     #[test]
     fn test_deserialize_double_premature_termination_4() {
-        assert_eof_in_constant(b"\x06\x12\x34\x56");
+        assert_eof(Constant::deserialize, b"\x06\x12\x34\x56");
     }
 
     #[test]
     fn test_deserialize_double_premature_termination_5() {
-        assert_eof_in_constant(b"\x06\x12\x34\x56\x78");
+        assert_eof(Constant::deserialize, b"\x06\x12\x34\x56\x78");
     }
 
     #[test]
     fn test_deserialize_double_premature_termination_6() {
-        assert_eof_in_constant(b"\x06\x12\x34\x56\x78\x9a");
+        assert_eof(Constant::deserialize, b"\x06\x12\x34\x56\x78\x9a");
     }
 
     #[test]
     fn test_deserialize_double_premature_termination_7() {
-        assert_eof_in_constant(b"\x06\x12\x34\x56\x78\x9a\xbc");
+        assert_eof(Constant::deserialize, b"\x06\x12\x34\x56\x78\x9a\xbc");
     }
 
     #[test]
     fn test_deserialize_double_premature_termination_8() {
-        assert_eof_in_constant(b"\x06\x12\x34\x56\x78\x9a\xbc\xde");
+        assert_eof(Constant::deserialize, b"\x06\x12\x34\x56\x78\x9a\xbc\xde");
     }
 
     #[test]
     fn test_deserialize_class_with_name_index_0() {
-        assert_constant(Constant::ClassRef(ConstantIndex(0)), b"\x07\x00\x00");
+        assert_deserialize(Constant::ClassRef(ConstantIndex(0)), b"\x07\x00\x00");
     }
 
     #[test]
     fn test_deserialize_class_with_name_index_1() {
-        assert_constant(Constant::ClassRef(ConstantIndex(1)), b"\x07\x00\x01");
+        assert_deserialize(Constant::ClassRef(ConstantIndex(1)), b"\x07\x00\x01");
     }
 
     #[test]
     fn test_deserialize_class_with_name_index_abcd() {
-        assert_constant(Constant::ClassRef(ConstantIndex(0xabcd)), b"\x07\xab\xcd");
+        assert_deserialize(Constant::ClassRef(ConstantIndex(0xabcd)), b"\x07\xab\xcd");
     }
 
     #[test]
     fn test_deserialize_class_with_name_index_ffff() {
-        assert_constant(Constant::ClassRef(ConstantIndex(0xffff)), b"\x07\xff\xff");
+        assert_deserialize(Constant::ClassRef(ConstantIndex(0xffff)), b"\x07\xff\xff");
     }
 
     #[test]
     fn test_deserialize_class_premature_termination_1() {
-        assert_eof_in_constant(b"\x07");
+        assert_eof(Constant::deserialize, b"\x07");
     }
 
     #[test]
     fn test_deserialize_class_premature_termination_2() {
-        assert_eof_in_constant(b"\x07\xab");
+        assert_eof(Constant::deserialize, b"\x07\xab");
     }
 
     #[test]
     fn test_deserialize_string_with_utf_index_0() {
-        assert_constant(Constant::StringRef(ConstantIndex(0)), b"\x08\x00\x00");
+        assert_deserialize(Constant::StringRef(ConstantIndex(0)), b"\x08\x00\x00");
     }
 
     #[test]
     fn test_deserialize_string_with_utf_index_1() {
-        assert_constant(Constant::StringRef(ConstantIndex(1)), b"\x08\x00\x01");
+        assert_deserialize(Constant::StringRef(ConstantIndex(1)), b"\x08\x00\x01");
     }
 
     #[test]
     fn test_deserialize_string_with_utf_index_abcd() {
-        assert_constant(Constant::StringRef(ConstantIndex(0xabcd)), b"\x08\xab\xcd");
+        assert_deserialize(Constant::StringRef(ConstantIndex(0xabcd)), b"\x08\xab\xcd");
     }
 
     #[test]
     fn test_deserialize_string_with_utf_index_ffff() {
-        assert_constant(Constant::StringRef(ConstantIndex(0xffff)), b"\x08\xff\xff");
+        assert_deserialize(Constant::StringRef(ConstantIndex(0xffff)), b"\x08\xff\xff");
     }
 
     #[test]
     fn test_deserialize_string_premature_termination_1() {
-        assert_eof_in_constant(b"\x08");
+        assert_eof(Constant::deserialize, b"\x08");
     }
 
     #[test]
     fn test_deserialize_string_premature_termination_2() {
-        assert_eof_in_constant(b"\x08\x01");
+        assert_eof(Constant::deserialize, b"\x08\x01");
     }
 
     #[test]
     fn test_deserialize_field_ref_with_0000_and_0000() {
-        assert_constant(Constant::FieldRef {
+        assert_deserialize(Constant::FieldRef {
             class: ConstantIndex(0),
             name_and_type: ConstantIndex(0),
         }, b"\x09\x00\x00\x00\x00");
@@ -686,7 +687,7 @@ mod tests {
 
     #[test]
     fn test_deserialize_field_ref_with_abcd_and_1234() {
-        assert_constant(Constant::FieldRef {
+        assert_deserialize(Constant::FieldRef {
             class: ConstantIndex(0xabcd),
             name_and_type: ConstantIndex(0x1234),
         }, b"\x09\xab\xcd\x12\x34");
@@ -694,27 +695,27 @@ mod tests {
 
     #[test]
     fn test_deserialize_field_ref_premature_termination_1() {
-        assert_eof_in_constant(b"\x09");
+        assert_eof(Constant::deserialize, b"\x09");
     }
 
     #[test]
     fn test_deserialize_field_ref_premature_termination_2() {
-        assert_eof_in_constant(b"\x09\x00");
+        assert_eof(Constant::deserialize, b"\x09\x00");
     }
 
     #[test]
     fn test_deserialize_field_ref_premature_termination_3() {
-        assert_eof_in_constant(b"\x09\x00\x00");
+        assert_eof(Constant::deserialize, b"\x09\x00\x00");
     }
 
     #[test]
     fn test_deserialize_field_ref_premature_termination_4() {
-        assert_eof_in_constant(b"\x09\x00\x00\x00");
+        assert_eof(Constant::deserialize, b"\x09\x00\x00\x00");
     }
 
     #[test]
     fn test_deserialize_method_ref_with_0000_and_0000() {
-        assert_constant(Constant::MethodRef {
+        assert_deserialize(Constant::MethodRef {
             class: ConstantIndex(0),
             name_and_type: ConstantIndex(0),
         }, b"\x0a\x00\x00\x00\x00");
@@ -722,7 +723,7 @@ mod tests {
 
     #[test]
     fn test_deserialize_method_ref_with_abcd_and_1234() {
-        assert_constant(Constant::MethodRef {
+        assert_deserialize(Constant::MethodRef {
             class: ConstantIndex(0xabcd),
             name_and_type: ConstantIndex(0x1234),
         }, b"\x0a\xab\xcd\x12\x34");
@@ -730,27 +731,27 @@ mod tests {
 
     #[test]
     fn test_deserialize_method_ref_premature_termination_1() {
-        assert_eof_in_constant(b"\x0a");
+        assert_eof(Constant::deserialize, b"\x0a");
     }
 
     #[test]
     fn test_deserialize_method_ref_premature_termination_2() {
-        assert_eof_in_constant(b"\x0a\x00");
+        assert_eof(Constant::deserialize, b"\x0a\x00");
     }
 
     #[test]
     fn test_deserialize_method_ref_premature_termination_3() {
-        assert_eof_in_constant(b"\x0a\x00\x00");
+        assert_eof(Constant::deserialize, b"\x0a\x00\x00");
     }
 
     #[test]
     fn test_deserialize_method_ref_premature_termination_4() {
-        assert_eof_in_constant(b"\x0a\x00\x00\x00");
+        assert_eof(Constant::deserialize, b"\x0a\x00\x00\x00");
     }
 
     #[test]
     fn test_deserialize_interface_method_ref_with_0000_and_0000() {
-        assert_constant(Constant::InterfaceMethodRef {
+        assert_deserialize(Constant::InterfaceMethodRef {
             class: ConstantIndex(0),
             name_and_type: ConstantIndex(0),
         }, b"\x0b\x00\x00\x00\x00");
@@ -758,7 +759,7 @@ mod tests {
 
     #[test]
     fn test_deserialize_interface_method_ref_with_abcd_and_1234() {
-        assert_constant(Constant::InterfaceMethodRef {
+        assert_deserialize(Constant::InterfaceMethodRef {
             class: ConstantIndex(0xabcd),
             name_and_type: ConstantIndex(0x1234),
         }, b"\x0b\xab\xcd\x12\x34");
@@ -766,22 +767,22 @@ mod tests {
 
     #[test]
     fn test_deserialize_interface_method_ref_premature_termination_1() {
-        assert_eof_in_constant(b"\x0b");
+        assert_eof(Constant::deserialize, b"\x0b");
     }
 
     #[test]
     fn test_deserialize_interface_method_ref_premature_termination_2() {
-        assert_eof_in_constant(b"\x0b\x00");
+        assert_eof(Constant::deserialize, b"\x0b\x00");
     }
 
     #[test]
     fn test_deserialize_interface_method_ref_premature_termination_3() {
-        assert_eof_in_constant(b"\x0b\x00\x00");
+        assert_eof(Constant::deserialize, b"\x0b\x00\x00");
     }
 
     #[test]
     fn test_deserialize_interface_method_ref_premature_termination_4() {
-        assert_eof_in_constant(b"\x0b\x00\x00\x00");
+        assert_eof(Constant::deserialize, b"\x0b\x00\x00\x00");
     }
 
     #[test]
@@ -831,32 +832,32 @@ mod tests {
 
     #[test]
     fn test_deserialize_method_handle_premature_termination_1() {
-        assert_eof_in_constant(b"\x0f");
+        assert_eof(Constant::deserialize, b"\x0f");
     }
 
     #[test]
     fn test_deserialize_method_handle_premature_termination_2_put_static() {
-        assert_eof_in_constant(b"\x0f\x04");
+        assert_eof(Constant::deserialize, b"\x0f\x04");
     }
 
     #[test]
     fn test_deserialize_method_handle_premature_termination_2_invoke_virtual() {
-        assert_eof_in_constant(b"\x0f\x05");
+        assert_eof(Constant::deserialize, b"\x0f\x05");
     }
 
     #[test]
     fn test_deserialize_method_handle_premature_termination_3_new_invoke_special() {
-        assert_eof_in_constant(b"\x0f\x08\xff");
+        assert_eof(Constant::deserialize, b"\x0f\x08\xff");
     }
 
     #[test]
     fn test_deserialize_method_handle_premature_termination_4_get_field() {
-        assert_eof_in_constant(b"\x0f\x01\xab");
+        assert_eof(Constant::deserialize, b"\x0f\x01\xab");
     }
 
     #[test]
     fn test_deserialize_method_handle_with_invalid_type_0x0a() {
-        deserialize_constant_expecting_error(b"\x0f\x0a\xab\xcd", |err| match *err {
+        deserialize_expecting_error(Constant::deserialize, b"\x0f\x0a\xab\xcd", |err| match *err {
             ClassLoaderError::InvalidMethodHandleKind(kind) => assert_eq!(0x0a, kind),
             _ => panic!("Expected InvalidMethodHandleKind, but got {:#?}", err)
         });
@@ -864,7 +865,7 @@ mod tests {
 
     #[test]
     fn test_deserialize_method_handle_with_invalid_type_0xff() {
-        deserialize_constant_expecting_error(b"\x0f\xff\x12\x34", |err| match *err {
+        deserialize_expecting_error(Constant::deserialize, b"\x0f\xff\x12\x34", |err| match *err {
             ClassLoaderError::InvalidMethodHandleKind(kind) => assert_eq!(0xff, kind),
             _ => panic!("Expected InvalidMethodHandleKind, but got {:#?}", err)
         });
@@ -872,7 +873,7 @@ mod tests {
 
     #[test]
     fn test_deserialize_method_handle_with_invalid_type_0x00() {
-        deserialize_constant_expecting_error(b"\x0f\x00\x13\xf7", |err| match *err {
+        deserialize_expecting_error(Constant::deserialize, b"\x0f\x00\x13\xf7", |err| match *err {
             ClassLoaderError::InvalidMethodHandleKind(kind) => assert_eq!(0x00, kind),
             _ => panic!("Expected InvalidMethodHandleKind, but got {:#?}", err)
         });
@@ -880,32 +881,32 @@ mod tests {
 
     #[test]
     fn test_deserialize_method_type_with_index_0x0000() {
-        assert_constant(Constant::MethodType(ConstantIndex(0x0000)), b"\x10\x00\x00");
+        assert_deserialize(Constant::MethodType(ConstantIndex(0x0000)), b"\x10\x00\x00");
     }
 
     #[test]
     fn test_deserialize_method_type_with_index_0x1234() {
-        assert_constant(Constant::MethodType(ConstantIndex(0x1234)), b"\x10\x12\x34");
+        assert_deserialize(Constant::MethodType(ConstantIndex(0x1234)), b"\x10\x12\x34");
     }
 
     #[test]
     fn test_deserialize_method_type_with_index_0xffff() {
-        assert_constant(Constant::MethodType(ConstantIndex(0xffff)), b"\x10\xff\xff");
+        assert_deserialize(Constant::MethodType(ConstantIndex(0xffff)), b"\x10\xff\xff");
     }
 
     #[test]
     fn test_deserialize_method_type_premature_termination_1() {
-        assert_eof_in_constant(b"\x10");
+        assert_eof(Constant::deserialize, b"\x10");
     }
 
     #[test]
     fn test_deserialize_method_type_premature_termination_2() {
-        assert_eof_in_constant(b"\x10\x5b");
+        assert_eof(Constant::deserialize, b"\x10\x5b");
     }
 
     #[test]
     fn test_deserialize_invoke_dynamic_info_with_indexes_0000_and_0000() {
-        assert_constant(Constant::InvokeDynamicInfo {
+        assert_deserialize(Constant::InvokeDynamicInfo {
             bootstrap_method_attr: MethodIndex(0),
             name_and_type: ConstantIndex(0),
         }, b"\x12\x00\x00\x00\x00");
@@ -913,7 +914,7 @@ mod tests {
 
     #[test]
     fn test_deserialize_invoke_dynamic_info_with_indexes_abcd_and_1234() {
-        assert_constant(Constant::InvokeDynamicInfo {
+        assert_deserialize(Constant::InvokeDynamicInfo {
             bootstrap_method_attr: MethodIndex(0xabcd),
             name_and_type: ConstantIndex(0x1234),
         }, b"\x12\xab\xcd\x12\x34");
@@ -921,60 +922,62 @@ mod tests {
 
     #[test]
     fn test_deserialize_invoke_dynamic_info_premature_termination_1() {
-        assert_eof_in_constant(b"\x12");
+        assert_eof(Constant::deserialize, b"\x12");
     }
 
     #[test]
     fn test_deserialize_invoke_dynamic_info_premature_termination_2() {
-        assert_eof_in_constant(b"\x12\x12");
+        assert_eof(Constant::deserialize, b"\x12\x12");
     }
 
     #[test]
     fn test_deserialize_invoke_dynamic_info_premature_termination_3() {
-        assert_eof_in_constant(b"\x12\x12\x34");
+        assert_eof(Constant::deserialize, b"\x12\x12\x34");
     }
 
     #[test]
     fn test_deserialize_invoke_dynamic_info_premature_termination_4() {
-        assert_eof_in_constant(b"\x12\x12\x34\x56");
+        assert_eof(Constant::deserialize, b"\x12\x12\x34\x56");
     }
 
     fn do_float_test(float_bits: u32, input: &[u8]) {
-        assert_constant(Constant::Float(f32::from_bits(float_bits)), input);
+        assert_deserialize(Constant::Float(f32::from_bits(float_bits)), input);
     }
 
     fn do_double_test(double_bits: u64, input: &[u8]) {
-        assert_constant(Constant::Double(f64::from_bits(double_bits)), input);
+        assert_deserialize(Constant::Double(f64::from_bits(double_bits)), input);
     }
 
     fn assert_method_handle(handle: MethodHandle, input: &[u8]) {
-        assert_constant(Constant::MethodHandleRef(handle), input);
+        assert_deserialize(Constant::MethodHandleRef(handle), input);
     }
 
-    fn assert_constant(constant: Constant, input: &[u8]) {
-        assert_eq!(Ok(constant), Constant::deserialize(&mut bytes::Bytes::from(input).into_buf()));
+    fn assert_deserialize<D: Deserialize+Debug+PartialEq>(expected: D, input: &[u8]) {
+        assert_eq!(Ok(expected), D::deserialize(&mut bytes::Bytes::from(input).into_buf()));
     }
 
-    fn assert_eof_in_constant(input: &[u8]) {
-        deserialize_constant_expecting_error(input, |err| match *err {
-            ClassLoaderError::Eof(_) => (),
-            _ => panic!("Expected EOF, but got {:#?}", err),
-        });
+    fn assert_eof<D: Deserialize+Debug, F> (deserializer: F, input: &[u8])
+        where F: Fn(&mut bytes::Buf) -> Result<D, ClassLoaderError> {
+            deserialize_expecting_error(deserializer, input, |err| match *err {
+                ClassLoaderError::Eof(_) => (),
+                _ => panic!("Expected EOF, but got {:#?}", err),
+            });
     }
 
     fn assert_invalid_utf8(input: &[u8]) {
-        deserialize_constant_expecting_error(input, |err| match *err {
+        deserialize_expecting_error(Constant::deserialize, input, |err| match *err {
             ClassLoaderError::Utf8(_) => (),
             _ => panic!("Expected Utf8 parse error, but got {:#?}", err),
         });
     }
 
-    fn deserialize_constant_expecting_error<F>(input: &[u8], handler: F) where
-        F: Fn(&ClassLoaderError) {
-        let res = Constant::deserialize(&mut bytes::Bytes::from(input).into_buf());
-        match res {
-            Ok(ref res) => panic!("Expected EOF, but got result {:#?}", res),
-            Err(ref err) => handler(&err),
-        }
+    fn deserialize_expecting_error<D: Deserialize+fmt::Debug, F, G>(deserializer: F, input: &[u8], handler: G) where
+        F: Fn(&mut bytes::Buf) -> Result<D, ClassLoaderError>,
+        G: Fn(&ClassLoaderError) {
+            let res = deserializer(&mut bytes::Bytes::from(input).into_buf());
+            match res {
+                Ok(ref res) => panic!("Expected error, but got result {:#?}", res),
+                Err(ref err) => handler(&err),
+            }
     }
 }
