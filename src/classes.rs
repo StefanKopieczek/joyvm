@@ -187,10 +187,10 @@ pub enum Attribute {
 
 #[derive(PartialEq, Eq, Debug)]
 pub struct ExceptionTableRow {
-    start_pc: u16,
-    end_pc: u16,
-    handler_pc: u16,
-    catch_type: ConstantIndex
+    pub start_pc: u16,
+    pub end_pc: u16,
+    pub handler_pc: u16,
+    pub catch_type: ConstantIndex
 }
 
 #[derive(PartialEq, Eq, Debug)]

@@ -203,6 +203,21 @@ fn deserialize_constant_value(attribute_name: ConstantIndex, data: &mut bytes::B
     });
 }
 
+impl Deserialize for ExceptionTableRow {
+    fn deserialize(data: &mut bytes::Buf) -> Result<ExceptionTableRow, ClassLoaderError> {
+        if data.remaining() < 8 {
+            return Err(ClassLoaderError::Eof("Unexpected end of stream while parsing exception table row".to_string()))
+        }
+
+        return Ok(ExceptionTableRow {
+            start_pc: data.get_u16_be(),
+            end_pc: data.get_u16_be(),
+            handler_pc: data.get_u16_be(),
+            catch_type: deserialize_constant_index(data)?,
+        });
+    }
+}
+
 #[derive(Debug, PartialEq)]
 pub enum ClassLoaderError {
     Utf8(str::Utf8Error),
@@ -1256,6 +1271,60 @@ mod tests {
         );
     }
 
+    #[test]
+    fn test_deserialize_exception_table_row_valid_1() {
+        assert_deserialize(ExceptionTableRow {
+            start_pc: 0,
+            end_pc: 0,
+            handler_pc: 0,
+            catch_type: ConstantIndex(0),
+        }, b"\x00\x00\x00\x00\x00\x00\x00\x00");
+    }
+
+    #[test]
+    fn test_deserialize_exception_table_row_valid_2() {
+        assert_deserialize(ExceptionTableRow {
+            start_pc: 0x1234,
+            end_pc: 0x5678,
+            handler_pc: 0x9abc,
+            catch_type: ConstantIndex(0xdef0),
+        }, b"\x12\x34\x56\x78\x9a\xbc\xde\xf0");
+    }
+
+    #[test]
+    fn test_deserialize_exception_table_row_premature_termination_1() {
+        assert_eof(ExceptionTableRow::deserialize, b"\x12");
+    }
+
+    #[test]
+    fn test_deserialize_exception_table_row_premature_termination_2() {
+        assert_eof(ExceptionTableRow::deserialize, b"\x12\x34");
+    }
+
+    #[test]
+    fn test_deserialize_exception_table_row_premature_termination_3() {
+        assert_eof(ExceptionTableRow::deserialize, b"\x12\x34\x56");
+    }
+
+    #[test]
+    fn test_deserialize_exception_table_row_premature_termination_4() {
+        assert_eof(ExceptionTableRow::deserialize, b"\x12\x34\x56\x78");
+    }
+
+    #[test]
+    fn test_deserialize_exception_table_row_premature_termination_5() {
+        assert_eof(ExceptionTableRow::deserialize, b"\x12\x34\x56\x78\x9a");
+    }
+
+    #[test]
+    fn test_deserialize_exception_table_row_premature_termination_6() {
+        assert_eof(ExceptionTableRow::deserialize, b"\x12\x34\x56\x78\x9a\xbc");
+    }
+
+    #[test]
+    fn test_deserialize_exception_table_row_premature_termination_7() {
+        assert_eof(ExceptionTableRow::deserialize, b"\x12\x34\x56\x78\x9a\xbc\xde");
+    }
 
     fn do_float_test(float_bits: u32, input: &[u8]) {
         assert_deserialize(Constant::Float(f32::from_bits(float_bits)), input);
