@@ -1,3 +1,5 @@
+use std::{error, fmt};
+
 #[derive(PartialEq, Debug)]
 pub struct Class {
     pub minor_version: u16,
@@ -12,13 +14,13 @@ pub struct Class {
     pub attributes: Vec<Attribute>,
 }
 
-#[derive(PartialEq, Eq, Debug)]
+#[derive(PartialEq, Eq, Clone, Debug)]
 pub struct ConstantIndex(pub u16);
 
-#[derive(PartialEq, Eq, Debug)]
+#[derive(PartialEq, Eq, Clone, Debug)]
 pub struct MethodIndex(pub u16);
 
-#[derive(PartialEq, Debug)]
+#[derive(PartialEq, Clone, Debug)]
 pub enum Constant {
     Utf8(String),
     Integer(u32),
@@ -292,7 +294,7 @@ pub struct BootstrapMethod {
     arguments: Vec<ConstantIndex>,
 }
 
-#[derive(PartialEq, Eq, Debug)]
+#[derive(PartialEq, Eq, Clone, Debug)]
 pub enum MethodHandle {
     GetField(ConstantIndex),
     GetStatic(ConstantIndex),
@@ -303,4 +305,124 @@ pub enum MethodHandle {
     InvokeSpecial(ConstantIndex),
     NewInvokeSpecial(ConstantIndex),
     InvokeInterface(ConstantIndex),
+}
+
+impl ConstantIndex {
+    pub fn lookup(self, constant_pool: &Vec<Constant>) -> Result<&Constant, ConstantLookupError> {
+        if self.0 == 0 {
+            return Err(ConstantLookupError::ZeroIndex);
+        } else if constant_pool.len() < self.0 as usize {
+            return Err(ConstantLookupError::OutOfRange(self.0));
+        }
+
+        let constant = &constant_pool[(self.0 - 1) as usize];
+        match *constant {
+            Constant::Dummy => Err(ConstantLookupError::IndexInsideDoubleWidthConstant(self.0)),
+            _ => Ok(constant),
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum ConstantLookupError {
+    OutOfRange(u16),
+    ZeroIndex,
+    IndexInsideDoubleWidthConstant(u16),
+}
+
+impl fmt::Display for ConstantLookupError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match *self {
+            ConstantLookupError::OutOfRange(ref index) => write!(f, "Constant index out of range: {}", index),
+            ConstantLookupError::ZeroIndex => write!(f, "Constant index 0 is invalid in this context"),
+            ConstantLookupError::IndexInsideDoubleWidthConstant(ref index) => write!(f, "Index {} lies inside a double-width value", index),
+        }
+    }
+}
+
+impl error::Error for ConstantLookupError {
+    fn description(&self) -> &str {
+        match *self {
+            ConstantLookupError::OutOfRange(_) => "Constant index out of range",
+            ConstantLookupError::ZeroIndex => "Constant index 0 is invalid in this context",
+            ConstantLookupError::IndexInsideDoubleWidthConstant(_) => "Constant index lies inside a double-width value",
+        }
+    }
+
+    fn cause(&self) -> Option<&error::Error> {
+        return None;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_lookup_constant_1_when_exists() {
+        let pool = vec![Constant::Integer(4)];
+        assert_eq!(Ok(&Constant::Integer(4)), ConstantIndex(1).lookup(&pool));
+    }
+
+    #[test]
+    fn test_lookup_constant_2_when_exists() {
+        let pool = vec![
+            Constant::Integer(42),
+            Constant::Utf8("Hello!".to_string()),
+        ];
+        assert_eq!(Ok(&Constant::Utf8("Hello!".to_string())), ConstantIndex(2).lookup(&pool));
+    }
+
+    #[test]
+    fn test_lookup_constant_0xffff_when_exists() {
+        let mut pool = vec![];
+        for idx in 1..0x10000 {
+            pool.push(Constant::Integer(idx));
+        }
+        assert_eq!(Ok(&Constant::Integer(0xffff)), ConstantIndex(0xffff).lookup(&pool));
+    }
+
+    #[test]
+    fn test_lookup_constant_2_in_singleton_pool_throws_out_of_range() {
+        let pool = vec![Constant::Float(1.0)];
+        assert_out_of_range(ConstantIndex(2), &pool);
+    }
+
+    #[test]
+    fn test_lookup_constant_1_in_empty_pool_throws_out_of_range() {
+        let pool = vec![];
+        assert_out_of_range(ConstantIndex(1), &pool);
+    }
+
+    #[test]
+    fn test_lookup_constant_0_in_singleton_pool_throws_zero_index() {
+        let pool = vec![Constant::Integer(3)];
+        assert_error(ConstantIndex(0), &pool, |err| match *err {
+            ConstantLookupError::ZeroIndex => (),
+            _ => panic!("Expected zero index error; got {:#?}", err),
+        });
+    }
+
+    #[test]
+    fn test_lookup_yielding_dummy_throws_index_inside_double_width_constant() {
+        let pool = vec![Constant::Integer(3), Constant::Long(4), Constant::Dummy, Constant::Utf8("Foo".to_string())];
+        assert_error(ConstantIndex(3), &pool, |err| match *err {
+            ConstantLookupError::IndexInsideDoubleWidthConstant(_) => (),
+            _ => panic!("Expected index-inside-double-width-constant error; got {:#?}", err),
+        });
+    }
+
+    fn assert_out_of_range(index: ConstantIndex, pool: &Vec<Constant>) {
+        assert_error(index, pool, |err| match *err {
+            ConstantLookupError::OutOfRange(_) => (),
+            _ => panic!("Expected out of range; got {:#?}", err),
+        });
+    }
+
+    fn assert_error<H>(index: ConstantIndex, pool: &Vec<Constant>, handler: H)
+       where H: Fn(&ConstantLookupError)
+    {
+        let err = index.lookup(&pool).expect_err("Expected an error; got unexpected result");
+        handler(&err);
+    }
 }

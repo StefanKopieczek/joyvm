@@ -173,17 +173,43 @@ fn deserialize_method_index(data: &mut bytes::Buf) -> Result<MethodIndex, ClassL
 
 impl DeserializeWithConstants for Attribute {
     fn deserialize(data: &mut bytes::Buf, constants: &Vec<Constant>) -> Result<Attribute, ClassLoaderError> {
-        return Err(ClassLoaderError::Misc("Not yet implemented".to_string()));
+        let attribute_type_index = deserialize_constant_index(data)?; // TODO test this
+        let attribute_type_ref : &Constant = attribute_type_index.lookup(constants)?;
+        let attribute_type = match *attribute_type_ref {
+            Constant::Utf8(ref attr_type) => Ok(attr_type),
+            _ => Err(ClassLoaderError::InvalidAttributeType(attribute_type_ref.clone())),
+        }?;
+
+        match attribute_type.as_ref() {
+            "ConstantValue" => deserialize_constant_value(data),
+            _ => Err(ClassLoaderError::UnknownAttributeType(attribute_type.to_string()))
+        }
     }
 }
 
-#[derive(Debug, PartialEq, Eq)]
+fn deserialize_constant_value(data: &mut bytes::Buf) -> Result<Attribute, ClassLoaderError> {
+    return Ok(Attribute::ConstantValue {
+        attribute_name: ConstantIndex(0),
+        constant_value: ConstantIndex(0),
+    });
+}
+
+#[derive(Debug, PartialEq)]
 pub enum ClassLoaderError {
     Utf8(str::Utf8Error),
     Eof(String),
+    InvalidConstantRef(ConstantLookupError),
     InvalidConstantType(u8),
     InvalidMethodHandleKind(u8),
+    InvalidAttributeType(Constant),
     Misc(String),
+    UnknownAttributeType(String),
+}
+
+impl std::convert::From<ConstantLookupError> for ClassLoaderError {
+    fn from(cause: ConstantLookupError) -> ClassLoaderError {
+        return ClassLoaderError::InvalidConstantRef(cause);
+    }
 }
 
 impl fmt::Display for ClassLoaderError {
@@ -191,9 +217,12 @@ impl fmt::Display for ClassLoaderError {
         match *self {
             ClassLoaderError::Utf8(ref cause) => write!(f, "Failed to decode UTF-8: {}", cause),
             ClassLoaderError::Eof(ref msg) => write!(f, "Unexpected EOF: {}", msg),
+            ClassLoaderError::InvalidConstantRef(ref cause) => write!(f, "Invalid constant reference: {}", cause),
             ClassLoaderError::InvalidConstantType(ref tag) => write!(f, "Unsupported constant type {}", tag),
             ClassLoaderError::InvalidMethodHandleKind(ref kind) => write!(f, "Unsupported method handle kind {}", kind),
+            ClassLoaderError::InvalidAttributeType(ref attribute_type) => write!(f, "Invalid attribute type {:#?}", attribute_type),
             ClassLoaderError::Misc(ref msg) => write!(f, "Unexpected error during class load: {}", msg),
+            ClassLoaderError::UnknownAttributeType(ref type_name) => write!(f, "Unknown attribute type '{}'", type_name),
         }
     }
 }
@@ -203,19 +232,25 @@ impl error::Error for ClassLoaderError {
         match *self {
             ClassLoaderError::Utf8(_) => "Failed to decode Utf8 data",
             ClassLoaderError::Eof(ref msg) => msg,
+            ClassLoaderError::InvalidConstantRef(_) => "Invalid constant reference",
             ClassLoaderError::InvalidConstantType(..) => "Unsupported constant type",
             ClassLoaderError::InvalidMethodHandleKind(..) => "Unsupported method handle kind",
+            ClassLoaderError::InvalidAttributeType(..) => "Invalid attribute type",
             ClassLoaderError::Misc(ref msg) => msg,
+            ClassLoaderError::UnknownAttributeType(..) => "Unknown attribute type",
         }
     }
 
     fn cause(&self) -> Option<&error::Error> {
         match *self {
             ClassLoaderError::Utf8(ref cause) => Some(cause),
+            ClassLoaderError::InvalidConstantRef(ref cause) => Some(cause),
             ClassLoaderError::Eof(..) => None,
             ClassLoaderError::InvalidConstantType(..) => None,
             ClassLoaderError::InvalidMethodHandleKind(..) => None,
+            ClassLoaderError::InvalidAttributeType(..) => None,
             ClassLoaderError::Misc(..) => None,
+            ClassLoaderError::UnknownAttributeType(..) => None,
         }
     }
 }
@@ -957,6 +992,150 @@ mod tests {
         assert_eof(Constant::deserialize, b"\x12\x12\x34\x56");
     }
 
+    #[test]
+    fn test_deserialize_attribute_where_type_ref_is_integer() {
+        let bytes = b"\x00\x01\x00\x00\x00\x00";
+        let constants = vec![Constant::Integer(42)];
+        assert_invalid_attribute_type(bytes, &constants);
+    }
+
+    #[test]
+    fn test_deserialize_attribute_where_type_ref_is_integer_2() {
+        // Here the constant pool does contain a valid type name, but the Attribute object
+        // instead points at the Integer in the pool instead.
+        let bytes = b"\x00\x02\x00\x00\x00\x00";
+        let constants = vec![Constant::Utf8("ConstantValue".to_string()), Constant::Integer(42)];
+        assert_invalid_attribute_type(bytes, &constants);
+    }
+
+    #[test]
+    fn test_deserialize_attribute_where_type_ref_is_float() {
+        let bytes = b"\x00\x01\x00\x00\x00\x00";
+        let constants = vec![Constant::Float(7.0)];
+        assert_invalid_attribute_type(bytes, &constants);
+    }
+
+    #[test]
+    fn test_deserialize_attribute_where_type_ref_is_long() {
+        let bytes = b"\x00\x01\x00\x00\x00\x00";
+        let constants = vec![Constant::Long(1337)];
+        assert_invalid_attribute_type(bytes, &constants);
+    }
+
+    #[test]
+    fn test_deserialize_attribute_where_type_ref_is_double() {
+        let bytes = b"\x00\x01\x00\x00\x00\x00";
+        let constants = vec![Constant::Double(14.0)];
+        assert_invalid_attribute_type(bytes, &constants);
+    }
+
+    #[test]
+    fn test_deserialize_attribute_where_type_ref_is_class_ref() {
+        let bytes = b"\x00\x01\x00\x00\x00\x00";
+        let constants = vec![Constant::ClassRef(ConstantIndex(0))];
+        assert_invalid_attribute_type(bytes, &constants);
+    }
+
+    #[test]
+    fn test_deserialize_attribute_where_type_ref_is_string_ref() {
+        // Attribute types should be Utf8. Here the type is a String that points to a Utf8, which
+        // is not permitted.
+        let bytes = b"\x00\x01\x00\x00\x00\x00";
+        let constants = vec![Constant::StringRef(ConstantIndex(2)), Constant::Utf8("ConstantRef".to_string())];
+        assert_invalid_attribute_type(bytes, &constants);
+    }
+
+    #[test]
+    fn test_deserialize_attribute_where_type_ref_is_field_ref() {
+        let bytes = b"\x00\x01\x00\x00\x00\x00";
+        let constants = vec![Constant::FieldRef{class: ConstantIndex(0), name_and_type: ConstantIndex(0)}];
+        assert_invalid_attribute_type(bytes, &constants);
+    }
+
+    #[test]
+    fn test_deserialize_attribute_where_type_ref_is_method_ref() {
+        let bytes = b"\x00\x01\x00\x00\x00\x00";
+        let constants = vec![Constant::MethodRef{class: ConstantIndex(0), name_and_type: ConstantIndex(0)}];
+        assert_invalid_attribute_type(bytes, &constants);
+    }
+
+    #[test]
+    fn test_deserialize_attribute_where_type_ref_is_interface_method_ref() {
+        let bytes = b"\x00\x01\x00\x00\x00\x00";
+        let constants = vec![Constant::InterfaceMethodRef{class: ConstantIndex(0), name_and_type: ConstantIndex(0)}];
+        assert_invalid_attribute_type(bytes, &constants);
+    }
+
+    #[test]
+    fn test_deserialize_attribute_where_type_ref_is_name_and_type_ref() {
+        let bytes = b"\x00\x01\x00\x00\x00\x00";
+        let constants = vec![Constant::NameAndTypeRef{name: ConstantIndex(0), descriptor: ConstantIndex(0)}];
+        assert_invalid_attribute_type(bytes, &constants);
+    }
+
+    #[test]
+    fn test_deserialize_attribute_where_type_ref_is_method_handle_get_field() {
+        let bytes = b"\x00\x01\x00\x00\x00\x00";
+        let constants = vec![Constant::MethodHandleRef(MethodHandle::GetField(ConstantIndex(0)))];
+        assert_invalid_attribute_type(bytes, &constants);
+    }
+
+    #[test]
+    fn test_deserialize_attribute_where_type_ref_is_method_handle_put_static() {
+        let bytes = b"\x00\x01\x00\x00\x00\x00";
+        let constants = vec![Constant::MethodHandleRef(MethodHandle::PutStatic(ConstantIndex(0)))];
+        assert_invalid_attribute_type(bytes, &constants);
+    }
+
+    #[test]
+    fn test_deserialize_attribute_where_type_ref_is_method_type() {
+        let bytes = b"\x00\x01\x00\x00\x00\x00";
+        let constants = vec![Constant::MethodType(ConstantIndex(0))];
+        assert_invalid_attribute_type(bytes, &constants);
+    }
+
+    #[test]
+    fn test_deserialize_attribute_where_type_ref_is_invoke_dynamic_info() {
+        let bytes = b"\x00\x01\x00\x00\x00\x00";
+        let constants = vec![Constant::InvokeDynamicInfo{bootstrap_method_attr: MethodIndex(0), name_and_type: ConstantIndex(0)}];
+        assert_invalid_attribute_type(bytes, &constants);
+    }
+
+    #[test]
+    fn test_deserialize_attribute_where_type_ref_is_dummy() {
+        // Here we're testing that an error is thrown if the attribute type index points into the
+        // middle of a Long or Double value (these take up two consecutive slots in the constant
+        // pool)
+        let bytes = b"\x00\x01\x00\x00\x00\x00";
+        let constants = vec![Constant::Dummy];
+        deserialize_with_constants_expecting_error(Attribute::deserialize, bytes, &constants, |err| match *err {
+            ClassLoaderError::InvalidConstantRef(_) => (),
+            _ => panic!("Expected invalid constant index; got {:#?}", err),
+        });
+    }
+
+    #[test]
+    fn test_deserialize_attribute_ending_before_type_ref() {
+        assert_eof_with_constants(Attribute::deserialize, b"", &vec![]);
+    }
+
+    #[test]
+    fn test_deserialize_attribute_ending_during_type_ref() {
+        assert_eof_with_constants(Attribute::deserialize, b"\x00", &vec![]);
+    }
+
+    #[test]
+    fn test_deserialize_constant_attribute_at_0000_and_0000() {
+        let bytes = b"\x00\x01\x00\x00\x00\x02\x00\x00";
+        let constants = vec![Constant::Utf8("ConstantValue".to_string())];
+        let expected = Attribute::ConstantValue {
+            attribute_name: ConstantIndex(0x0000),
+            constant_value: ConstantIndex(0x0000),
+        };
+
+        assert_deserialize_with_constants(expected, bytes, &constants);
+    }
+
     fn do_float_test(float_bits: u32, input: &[u8]) {
         assert_deserialize(Constant::Float(f32::from_bits(float_bits)), input);
     }
@@ -991,6 +1170,13 @@ mod tests {
                 ClassLoaderError::Eof(_) => (),
                 _ => panic!("Expected EOF, but got {:#?}", err),
             });
+    }
+
+    fn assert_invalid_attribute_type(input: &[u8], constants: &Vec<Constant>) {
+        deserialize_with_constants_expecting_error(Attribute::deserialize, input, constants, |err| match *err {
+            ClassLoaderError::InvalidAttributeType(_) => (),
+            _ => panic!("Expected InvalidAttributeType, but got {:#?}", err),
+        });
     }
 
     fn assert_invalid_utf8(input: &[u8]) {
