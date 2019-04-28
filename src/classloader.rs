@@ -7,8 +7,16 @@ use std::{error, fmt, str};
 #[allow(unused_imports)]
 use bytes::IntoBuf;
 
+// Trait for entities that can be unambiguously deserialized without reference to
+// other sibling or parent entities.
 trait Deserialize: Sized {
     fn deserialize(data: &mut bytes::Buf) -> Result<Self, ClassLoaderError>;
+}
+
+// Trait for entities that require information about the ConstantPool to be
+// deserialized.
+trait DeserializeWithConstants: Sized {
+    fn deserialize(data: &mut bytes::Buf, constants: &Vec<Constant>) -> Result<Self, ClassLoaderError>;
 }
 
 impl Deserialize for Constant {
@@ -163,12 +171,19 @@ fn deserialize_method_index(data: &mut bytes::Buf) -> Result<MethodIndex, ClassL
     return Ok(MethodIndex(data.get_u16_be()));
 }
 
+impl DeserializeWithConstants for Attribute {
+    fn deserialize(data: &mut bytes::Buf, constants: &Vec<Constant>) -> Result<Attribute, ClassLoaderError> {
+        return Err(ClassLoaderError::Misc("Not yet implemented".to_string()));
+    }
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum ClassLoaderError {
     Utf8(str::Utf8Error),
     Eof(String),
     InvalidConstantType(u8),
     InvalidMethodHandleKind(u8),
+    Misc(String),
 }
 
 impl fmt::Display for ClassLoaderError {
@@ -178,6 +193,7 @@ impl fmt::Display for ClassLoaderError {
             ClassLoaderError::Eof(ref msg) => write!(f, "Unexpected EOF: {}", msg),
             ClassLoaderError::InvalidConstantType(ref tag) => write!(f, "Unsupported constant type {}", tag),
             ClassLoaderError::InvalidMethodHandleKind(ref kind) => write!(f, "Unsupported method handle kind {}", kind),
+            ClassLoaderError::Misc(ref msg) => write!(f, "Unexpected error during class load: {}", msg),
         }
     }
 }
@@ -189,6 +205,7 @@ impl error::Error for ClassLoaderError {
             ClassLoaderError::Eof(ref msg) => msg,
             ClassLoaderError::InvalidConstantType(..) => "Unsupported constant type",
             ClassLoaderError::InvalidMethodHandleKind(..) => "Unsupported method handle kind",
+            ClassLoaderError::Misc(ref msg) => msg,
         }
     }
 
@@ -956,9 +973,21 @@ mod tests {
         assert_eq!(Ok(expected), D::deserialize(&mut bytes::Bytes::from(input).into_buf()));
     }
 
+    fn assert_deserialize_with_constants<D: DeserializeWithConstants+Debug+PartialEq>(expected: D, input: &[u8], constants: &Vec<Constant>) {
+        assert_eq!(Ok(expected), D::deserialize(&mut bytes::Bytes::from(input).into_buf(), constants));
+    }
+
     fn assert_eof<D: Deserialize+Debug, F> (deserializer: F, input: &[u8])
         where F: Fn(&mut bytes::Buf) -> Result<D, ClassLoaderError> {
             deserialize_expecting_error(deserializer, input, |err| match *err {
+                ClassLoaderError::Eof(_) => (),
+                _ => panic!("Expected EOF, but got {:#?}", err),
+            });
+    }
+
+    fn assert_eof_with_constants<D: DeserializeWithConstants+Debug, F> (deserializer: F, input: &[u8], constants: &Vec<Constant>)
+        where F: Fn(&mut bytes::Buf, &Vec<Constant>) -> Result<D, ClassLoaderError> {
+            deserialize_with_constants_expecting_error(deserializer, input, constants, |err| match *err {
                 ClassLoaderError::Eof(_) => (),
                 _ => panic!("Expected EOF, but got {:#?}", err),
             });
@@ -976,6 +1005,16 @@ mod tests {
         G: Fn(&ClassLoaderError) {
             let res = deserializer(&mut bytes::Bytes::from(input).into_buf());
             match res {
+                Ok(ref res) => panic!("Expected error, but got result {:#?}", res),
+                Err(ref err) => handler(&err),
+            }
+    }
+
+    fn deserialize_with_constants_expecting_error<D: DeserializeWithConstants+Debug, F, G>(deserializer: F, input: &[u8], constants: &Vec<Constant>, handler: G) where
+        F: Fn(&mut bytes::Buf, &Vec<Constant>) -> Result<D, ClassLoaderError>,
+        G: Fn(&ClassLoaderError) {
+            let res = deserializer(&mut bytes::Bytes::from(input).into_buf(), constants);
+            match res{
                 Ok(ref res) => panic!("Expected error, but got result {:#?}", res),
                 Err(ref err) => handler(&err),
             }
