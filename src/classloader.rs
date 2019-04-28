@@ -173,24 +173,33 @@ fn deserialize_method_index(data: &mut bytes::Buf) -> Result<MethodIndex, ClassL
 
 impl DeserializeWithConstants for Attribute {
     fn deserialize(data: &mut bytes::Buf, constants: &Vec<Constant>) -> Result<Attribute, ClassLoaderError> {
-        let attribute_type_index = deserialize_constant_index(data)?; // TODO test this
-        let attribute_type_ref : &Constant = attribute_type_index.lookup(constants)?;
+        let attribute_type_index = deserialize_constant_index(data)?;
+        let attribute_type_ref = attribute_type_index.lookup(constants)?;
         let attribute_type = match *attribute_type_ref {
             Constant::Utf8(ref attr_type) => Ok(attr_type),
             _ => Err(ClassLoaderError::InvalidAttributeType(attribute_type_ref.clone())),
         }?;
 
         match attribute_type.as_ref() {
-            "ConstantValue" => deserialize_constant_value(data),
+            "ConstantValue" => deserialize_constant_value(attribute_type_index, data),
             _ => Err(ClassLoaderError::UnknownAttributeType(attribute_type.to_string()))
         }
     }
 }
 
-fn deserialize_constant_value(data: &mut bytes::Buf) -> Result<Attribute, ClassLoaderError> {
+fn deserialize_constant_value(attribute_name: ConstantIndex, data: &mut bytes::Buf) -> Result<Attribute, ClassLoaderError> {
+    if data.remaining() < 4 {
+        return Err(ClassLoaderError::Eof("Unexpected end of stream while parsing attribute length".to_string()));
+    }
+
+    let length = data.get_u32_be();
+    if length != 2 {
+        return Err(ClassLoaderError::Misc("ConstantValue attribute must have length of exactly 2".to_string()));
+    }
+
     return Ok(Attribute::ConstantValue {
-        attribute_name: ConstantIndex(0),
-        constant_value: ConstantIndex(0),
+        attribute_name: attribute_name,
+        constant_value: deserialize_constant_index(data)?,
     });
 }
 
@@ -1125,16 +1134,128 @@ mod tests {
     }
 
     #[test]
-    fn test_deserialize_constant_attribute_at_0000_and_0000() {
-        let bytes = b"\x00\x01\x00\x00\x00\x02\x00\x00";
+    fn test_deserialize_constant_attribute_at_0x0001_and_0x0002() {
+        let bytes = b"\x00\x01\x00\x00\x00\x02\x00\x02";
         let constants = vec![Constant::Utf8("ConstantValue".to_string())];
         let expected = Attribute::ConstantValue {
-            attribute_name: ConstantIndex(0x0000),
-            constant_value: ConstantIndex(0x0000),
+            attribute_name: ConstantIndex(0x0001),
+            constant_value: ConstantIndex(0x0002),
         };
 
         assert_deserialize_with_constants(expected, bytes, &constants);
     }
+
+    #[test]
+    fn test_deserialize_constant_attribute_at_0x1234_and_0x5678() {
+        let bytes = b"\x12\x34\x00\x00\x00\x02\x56\x78";
+        let mut constants = vec![];
+        for _ in 0..0x1233 {
+            constants.push(Constant::Integer(4));
+        }
+
+        constants.push(Constant::Utf8("ConstantValue".to_string()));
+        let expected = Attribute::ConstantValue {
+            attribute_name: ConstantIndex(0x1234),
+            constant_value: ConstantIndex(0x5678),
+        };
+
+        assert_deserialize_with_constants(expected, bytes, &constants);
+    }
+
+    #[test]
+    fn test_deserialize_constant_attribute_premature_termination_1() {
+        assert_eof_with_constants(
+            Attribute::deserialize,
+            b"\x00\x01",
+            &vec![Constant::Utf8("ConstantValue".to_string())]
+        );
+    }
+
+    #[test]
+    fn test_deserialize_constant_attribute_premature_termination_2() {
+        assert_eof_with_constants(
+            Attribute::deserialize,
+            b"\x00\x01\x00",
+            &vec![Constant::Utf8("ConstantValue".to_string())]
+        );
+    }
+
+    #[test]
+    fn test_deserialize_constant_attribute_premature_termination_3() {
+        assert_eof_with_constants(
+            Attribute::deserialize,
+            b"\x00\x01\x00\x00",
+            &vec![Constant::Utf8("ConstantValue".to_string())]
+        );
+    }
+
+    #[test]
+    fn test_deserialize_constant_attribute_premature_termination_4() {
+        assert_eof_with_constants(
+            Attribute::deserialize,
+            b"\x00\x01\x00\x00\x00",
+            &vec![Constant::Utf8("ConstantValue".to_string())]
+        );
+    }
+
+    #[test]
+    fn test_deserialize_constant_attribute_premature_termination_5() {
+        assert_eof_with_constants(
+            Attribute::deserialize,
+            b"\x00\x01\x00\x00\x00\x02",
+            &vec![Constant::Utf8("ConstantValue".to_string())]
+        );
+    }
+
+    #[test]
+    fn test_deserialize_constant_attribute_premature_termination_6() {
+        assert_eof_with_constants(
+            Attribute::deserialize,
+            b"\x00\x01\x00\x00\x00\x02\xff",
+            &vec![Constant::Utf8("ConstantValue".to_string())]
+        );
+    }
+
+    #[test]
+    fn test_deserialize_constant_attribute_with_length_0() {
+        deserialize_with_constants_expecting_error(
+            Attribute::deserialize,
+            b"\x00\x01\x00\x00\x00\x00\xab\xcb",
+            &vec![Constant::Utf8("ConstantValue".to_string())],
+            |_| ()  // Allow any error here
+        );
+    }
+
+    #[test]
+    fn test_deserialize_constant_attribute_with_length_1() {
+        deserialize_with_constants_expecting_error(
+            Attribute::deserialize,
+            b"\x00\x01\x00\x00\x00\x01\xab\xcb",
+            &vec![Constant::Utf8("ConstantValue".to_string())],
+            |_| ()  // Allow any error here
+        );
+    }
+
+    #[test]
+    fn test_deserialize_constant_attribute_with_length_3() {
+        deserialize_with_constants_expecting_error(
+            Attribute::deserialize,
+            b"\x00\x01\x00\x00\x00\x03\xab\xcb",
+            &vec![Constant::Utf8("ConstantValue".to_string())],
+            |_| ()  // Allow any error here
+        );
+    }
+
+    #[test]
+    fn test_deserialize_constant_attribute_with_maximum_length() {
+        deserialize_with_constants_expecting_error(
+            Attribute::deserialize,
+            b"\x00\x01\xff\xff\xff\xff\xab\xcb",
+            &vec![Constant::Utf8("ConstantValue".to_string())],
+            |_| ()  // Allow any error here
+        );
+    }
+
 
     fn do_float_test(float_bits: u32, input: &[u8]) {
         assert_deserialize(Constant::Float(f32::from_bits(float_bits)), input);

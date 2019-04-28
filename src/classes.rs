@@ -308,7 +308,7 @@ pub enum MethodHandle {
 }
 
 impl ConstantIndex {
-    pub fn lookup(self, constant_pool: &Vec<Constant>) -> Result<&Constant, ConstantLookupError> {
+    pub fn lookup<'a>(&self, constant_pool: &'a Vec<Constant>) -> Result<&'a Constant, ConstantLookupError> {
         if self.0 == 0 {
             return Err(ConstantLookupError::ZeroIndex);
         } else if constant_pool.len() < self.0 as usize {
