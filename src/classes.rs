@@ -218,7 +218,7 @@ pub enum VerificationType {
     Null,
     UninitializedThis,
     Object(ConstantIndex),
-    Uninitialized,
+    Uninitialized(u16),
 }
 
 #[derive(PartialEq, Eq, Debug)]

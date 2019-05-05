@@ -33,7 +33,6 @@ macro_rules! require {
     }};
 }
 
-
 impl Deserialize for Constant {
     fn deserialize(data: &mut bytes::Buf) -> Result<Constant, ClassLoaderError> {
         require!(data has 1 byte for "constant tag");
@@ -255,6 +254,28 @@ impl Deserialize for ExceptionTableRow {
     }
 }
 
+impl Deserialize for VerificationType {
+    fn deserialize(data: &mut bytes::Buf) -> Result<VerificationType, ClassLoaderError> {
+        require!(data has 1 byte for "verification type identifier");
+        let type_id = data.get_u8();
+        return match type_id {
+            0 => Ok(VerificationType::Top),
+            1 => Ok(VerificationType::Integer),
+            2 => Ok(VerificationType::Float),
+            3 => Ok(VerificationType::Double),
+            4 => Ok(VerificationType::Long),
+            5 => Ok(VerificationType::Null),
+            6 => Ok(VerificationType::UninitializedThis),
+            7 => Ok(VerificationType::Object(deserialize_constant_index(data)?)),
+            8 => {
+                require!(data has 2 bytes for "uninitialized variable offset");
+                return Ok(VerificationType::Uninitialized(data.get_u16_be()));
+            },
+            _ => Err(ClassLoaderError::InvalidVerificationType(type_id)),
+        };
+    }
+}
+
 #[derive(Debug, PartialEq)]
 pub enum ClassLoaderError {
     Utf8(str::Utf8Error),
@@ -263,6 +284,7 @@ pub enum ClassLoaderError {
     InvalidConstantType(u8),
     InvalidMethodHandleKind(u8),
     InvalidAttributeType(Constant),
+    InvalidVerificationType(u8),
     LengthMismatch{context: String, stated_length: u32, inferred_length: u32},
     Misc(String),
     UnknownAttributeType(String),
@@ -283,6 +305,7 @@ impl fmt::Display for ClassLoaderError {
             ClassLoaderError::InvalidConstantType(ref tag) => write!(f, "Unsupported constant type {}", tag),
             ClassLoaderError::InvalidMethodHandleKind(ref kind) => write!(f, "Unsupported method handle kind {}", kind),
             ClassLoaderError::InvalidAttributeType(ref attribute_type) => write!(f, "Invalid attribute type {:#?}", attribute_type),
+            ClassLoaderError::InvalidVerificationType(ref verification_type_tag) => write!(f, "Invalid verification type tag: {}", verification_type_tag),
             ClassLoaderError::LengthMismatch{ref context, ref stated_length, ref inferred_length} =>
                 write!(f, "Stated length of {} disagrees with inferred length. Inferred length: {}; stated length: {}", context, inferred_length, stated_length),
             ClassLoaderError::Misc(ref msg) => write!(f, "Unexpected error during class load: {}", msg),
@@ -300,6 +323,7 @@ impl error::Error for ClassLoaderError {
             ClassLoaderError::InvalidConstantType(..) => "Unsupported constant type",
             ClassLoaderError::InvalidMethodHandleKind(..) => "Unsupported method handle kind",
             ClassLoaderError::InvalidAttributeType(..) => "Invalid attribute type",
+            ClassLoaderError::InvalidVerificationType(..) => "Invalid verification type",
             ClassLoaderError::LengthMismatch{..} => "Stated length of entity disagrees with inferred length",
             ClassLoaderError::Misc(ref msg) => msg,
             ClassLoaderError::UnknownAttributeType(..) => "Unknown attribute type",
@@ -314,6 +338,7 @@ impl error::Error for ClassLoaderError {
             ClassLoaderError::InvalidConstantType(..) => None,
             ClassLoaderError::InvalidMethodHandleKind(..) => None,
             ClassLoaderError::InvalidAttributeType(..) => None,
+            ClassLoaderError::InvalidVerificationType(..) => None,
             ClassLoaderError::LengthMismatch{..} => None,
             ClassLoaderError::Misc(..) => None,
             ClassLoaderError::UnknownAttributeType(..) => None,
@@ -1890,6 +1915,112 @@ mod tests {
                 ClassLoaderError::LengthMismatch{..} => (),
                 _ => panic!("Expected length mismatch; got {}", err),
             });
+    }
+
+    #[test]
+    fn test_deserializing_verification_type_top() {
+        assert_deserialize(VerificationType::Top, b"\x00");
+    }
+
+    #[test]
+    fn test_deserializing_verification_type_throws_error_if_buffer_is_empty() {
+        assert_eof(VerificationType::deserialize, b"");
+    }
+
+    #[test]
+    fn test_deserializing_verification_type_integer() {
+        assert_deserialize(VerificationType::Integer, b"\x01");
+    }
+
+    #[test]
+    fn test_deserializing_verification_type_float() {
+        assert_deserialize(VerificationType::Float, b"\x02");
+    }
+
+    #[test]
+    fn test_deserializing_verification_type_long() {
+        assert_deserialize(VerificationType::Long, b"\x04");
+    }
+
+    #[test]
+    fn test_deserializing_verification_type_double() {
+        assert_deserialize(VerificationType::Double, b"\x03");
+    }
+
+    #[test]
+    fn test_deserializing_verification_type_null() {
+        assert_deserialize(VerificationType::Null, b"\x05");
+    }
+
+    #[test]
+    fn test_deserializing_verification_type_uninitialized_this() {
+        assert_deserialize(VerificationType::UninitializedThis, b"\x06");
+    }
+
+    #[test]
+    fn test_deserializing_verification_type_object_at_index_0() {
+        assert_deserialize(VerificationType::Object(ConstantIndex(0)), b"\x07\x00\x00");
+    }
+
+    #[test]
+    fn test_deserializing_verification_type_object_at_index_1() {
+        assert_deserialize(VerificationType::Object(ConstantIndex(1)), b"\x07\x00\x01");
+    }
+
+    #[test]
+    fn test_deserializing_verification_type_object_at_index_0xffff() {
+        assert_deserialize(VerificationType::Object(ConstantIndex(0xffff)), b"\x07\xff\xff");
+    }
+
+    #[test]
+    fn test_deserializing_verification_type_object_premature_termination_1() {
+        assert_eof(VerificationType::deserialize, b"\x07");
+    }
+
+    #[test]
+    fn test_deserializing_verification_type_object_premature_termination_2() {
+        assert_eof(VerificationType::deserialize, b"\x07\x00");
+    }
+
+    #[test]
+    fn test_deserializing_verification_type_uninitialized_with_offset_0() {
+        assert_deserialize(VerificationType::Uninitialized(0), b"\x08\x00\x00");
+    }
+
+    #[test]
+    fn test_deserializing_verification_type_uninitialized_with_offset_1() {
+        assert_deserialize(VerificationType::Uninitialized(1), b"\x08\x00\x01");
+    }
+
+    #[test]
+    fn test_deserializing_verification_type_uninitialized_with_offset_0xffff() {
+        assert_deserialize(VerificationType::Uninitialized(0xffff), b"\x08\xff\xff");
+    }
+
+    #[test]
+    fn test_deserializing_verification_type_uninitialized_premature_termination_1() {
+        assert_eof(VerificationType::deserialize, b"\x08");
+    }
+
+    #[test]
+    fn test_deserializing_verification_type_uninitialized_premature_termination_2() {
+        assert_eof(VerificationType::deserialize, b"\x08\xff");
+    }
+
+    #[test]
+    fn test_verification_type_9_is_invalid() {
+        deserialize_expecting_error(VerificationType::deserialize, b"\x09", |err| match *err {
+            ClassLoaderError::InvalidVerificationType(..) => (),
+            _ => panic!("Expected InvalidVerificationType but got {}", err),
+        });
+    }
+
+    #[test]
+    fn test_verification_type_255_is_invalid() {
+        deserialize_expecting_error(VerificationType::deserialize, b"\xff", |err| match *err {
+            ClassLoaderError::InvalidVerificationType(..) => (),
+            _ => panic!("Expected InvalidVerificationType but got {}", err),
+        });
     }
 
     fn do_float_test(float_bits: u32, input: &[u8]) {
