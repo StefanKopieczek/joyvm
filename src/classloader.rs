@@ -19,12 +19,24 @@ trait DeserializeWithConstants: Sized {
     fn deserialize(data: &mut bytes::Buf, constants: &Vec<Constant>) -> Result<Self, ClassLoaderError>;
 }
 
+macro_rules! require {
+    // E.g: require! my_data has 4 bytes for "attribute length"
+    ($data:tt has $required:tt bytes for $context:tt) => {{
+        if $data.remaining() < $required {
+            return Err(ClassLoaderError::Eof(format!("Unexpected end of stream while parsing {}", $context.to_string())));
+        }
+    }};
+    ($data:tt has 1 byte for $context:tt) => {{
+        if $data.remaining() == 0 {
+            return Err(ClassLoaderError::Eof(format!("Unexpected end of stream while parsing {}", $context.to_string())));
+        }
+    }};
+}
+
+
 impl Deserialize for Constant {
     fn deserialize(data: &mut bytes::Buf) -> Result<Constant, ClassLoaderError> {
-        if data.remaining() == 0 {
-            return Err(ClassLoaderError::Eof("Unexpected end of stream; expected constant tag".to_string()));
-        }
-
+        require!(data has 1 byte for "constant tag");
         let tag = data.get_u8();
         match tag {
             1 => deserialize_utf8(data),
@@ -46,15 +58,10 @@ impl Deserialize for Constant {
 }
 
 fn deserialize_utf8(data: &mut bytes::Buf) -> Result<Constant, ClassLoaderError> {
-    if data.remaining() < 2 {
-        return Err(ClassLoaderError::Eof("Unexpected end of stream while parsing length field on Utf8 constant".to_string()));
-    }
-
+    require!(data has 2 bytes for "length field of Utf8 constant");
     let length = data.get_u16_be() as usize;
-    if data.remaining() < length {
-        return Err(ClassLoaderError::Eof("Unexpected end of stream while parsing Utf8 constant".to_string()));
-    }
 
+    require!(data has length bytes for "Utf8 constant");
     let mut contents = vec![0; length as usize];
     data.copy_to_slice(&mut contents);
 
@@ -64,34 +71,22 @@ fn deserialize_utf8(data: &mut bytes::Buf) -> Result<Constant, ClassLoaderError>
 }
 
 fn deserialize_integer(data: &mut bytes::Buf) -> Result<Constant, ClassLoaderError> {
-    if data.remaining() < 4 {
-        return Err(ClassLoaderError::Eof("Unexpected end of stream while parsing Integer constant".to_string()));
-    }
-
+    require!(data has 4 bytes for "Integer constant");
     return Ok(Constant::Integer(data.get_u32_be()));
 }
 
 fn deserialize_float(data: &mut bytes::Buf) -> Result<Constant, ClassLoaderError> {
-    if data.remaining() < 4 {
-        return Err(ClassLoaderError::Eof("Unexpected end of stream while parsing Float constant".to_string()));
-    }
-
+    require!(data has 4 bytes for "Float constant");
     return Ok(Constant::Float(data.get_f32_be()));
 }
 
 fn deserialize_long(data: &mut bytes::Buf) -> Result<Constant, ClassLoaderError> {
-    if data.remaining() < 8 {
-        return Err(ClassLoaderError::Eof("Unexpected end of stream while parsing Long constant".to_string()));
-    }
-
+    require!(data has 8 bytes for "Long constant");
     return Ok(Constant::Long(data.get_u64_be()));
 }
 
 fn deserialize_double(data: &mut bytes::Buf) -> Result<Constant, ClassLoaderError> {
-    if data.remaining() < 8 {
-        return Err(ClassLoaderError::Eof("Unexpected end of stream while parsing Double constant".to_string()));
-    }
-
+    require!(data has 8 bytes for "Double constant");
     return Ok(Constant::Double(data.get_f64_be()));
 }
 
@@ -122,10 +117,7 @@ fn deserialize_interface_method_ref(data: &mut bytes::Buf) -> Result<Constant, C
 }
 
 fn deserialize_method_handle_ref(data: &mut bytes::Buf) -> Result<Constant, ClassLoaderError> {
-    if data.remaining() == 0 {
-        return Err(ClassLoaderError::Eof("Unexpected end of stream while parsing method handle ref".to_string()));
-    }
-
+    require!(data has 1 byte for "method handle ref kind");
     let kind = data.get_u8();
     let index = deserialize_constant_index(data)?;
     let handle = match kind {
@@ -156,18 +148,12 @@ fn deserialize_invoke_dynamic_info(data: &mut bytes::Buf) -> Result<Constant, Cl
 }
 
 fn deserialize_constant_index(data: &mut bytes::Buf) -> Result<ConstantIndex, ClassLoaderError> {
-    if data.remaining() < 2 {
-        return Err(ClassLoaderError::Eof("Unexpected end of stream while parsing constant index".to_string()));
-    }
-
+    require!(data has 2 bytes for "constant index");
     return Ok(ConstantIndex(data.get_u16_be()));
 }
 
 fn deserialize_method_index(data: &mut bytes::Buf) -> Result<MethodIndex, ClassLoaderError> {
-    if data.remaining() < 2 {
-        return Err(ClassLoaderError::Eof("Unexpected end of stream while parsing method index".to_string()));
-    }
-
+    require!(data has 2 bytes for "method index");
     return Ok(MethodIndex(data.get_u16_be()));
 }
 
@@ -180,21 +166,24 @@ impl DeserializeWithConstants for Attribute {
             _ => Err(ClassLoaderError::InvalidAttributeType(attribute_type_ref.clone())),
         }?;
 
+        require!(data has 4 bytes for "attribute length");
+        let length = data.get_u32_be();
+
         match attribute_type.as_ref() {
-            "ConstantValue" => deserialize_constant_value(attribute_type_index, data),
+            "ConstantValue" => deserialize_constant_value(attribute_type_index, length, data),
+            "Code" => deserialize_code(attribute_type_index, constants, length, data),
             _ => Err(ClassLoaderError::UnknownAttributeType(attribute_type.to_string()))
         }
     }
 }
 
-fn deserialize_constant_value(attribute_name: ConstantIndex, data: &mut bytes::Buf) -> Result<Attribute, ClassLoaderError> {
-    if data.remaining() < 4 {
-        return Err(ClassLoaderError::Eof("Unexpected end of stream while parsing attribute length".to_string()));
-    }
-
-    let length = data.get_u32_be();
+fn deserialize_constant_value(attribute_name: ConstantIndex, length: u32, data: &mut bytes::Buf) -> Result<Attribute, ClassLoaderError> {
     if length != 2 {
-        return Err(ClassLoaderError::Misc("ConstantValue attribute must have length of exactly 2".to_string()));
+        return Err(ClassLoaderError::LengthMismatch {
+            context: "ConstantValue attribute".to_string(),
+            stated_length: length,
+            inferred_length: 2
+        });
     }
 
     return Ok(Attribute::ConstantValue {
@@ -203,12 +192,60 @@ fn deserialize_constant_value(attribute_name: ConstantIndex, data: &mut bytes::B
     });
 }
 
+fn deserialize_code(attribute_name: ConstantIndex, constants: &Vec<Constant>, declared_length: u32, data: &mut bytes::Buf) -> Result<Attribute, ClassLoaderError> {
+    let initial_bytes_remaining = data.remaining();
+
+    require!(data has 2 bytes for "Code attribute max stack size");
+    let max_stack = data.get_u16_be();
+
+    require!(data has 2 bytes for "Code attribute max locals count");
+    let max_locals = data.get_u16_be();
+
+    require!(data has 4 bytes for "Code attribute inner length");
+    let code_length = data.get_u32_be() as usize;
+
+    require!(data has code_length bytes for "Code attribute code body");
+    let mut code = vec![0; code_length];
+    for idx in 0..code_length {
+        code[idx] = data.get_u8();
+    }
+
+    require!(data has 2 bytes for "Code attribute exception table length");
+    let exception_row_count = data.get_u16_be() as usize;
+    let mut exception_table = vec![];
+    for _ in 0..exception_row_count {
+        exception_table.push(ExceptionTableRow::deserialize(data)?);
+    }
+
+    require!(data has 2 bytes for "Code attribute subattribute count");
+    let attributes_count = data.get_u16_be() as usize;
+    let mut attributes = vec![];
+    for _ in 0..attributes_count {
+        attributes.push(Attribute::deserialize(data, constants)?);
+    }
+
+    let actual_length = (initial_bytes_remaining - data.remaining()) as u32;
+    if actual_length != declared_length {
+        return Err(ClassLoaderError::LengthMismatch {
+            context: "Code attribute".to_string(),
+            stated_length: declared_length,
+            inferred_length: actual_length,
+        });
+    }
+
+    return Ok(Attribute::Code {
+        attribute_name: attribute_name,
+        max_stack: max_stack,
+        max_locals: max_locals,
+        code: code,
+        exception_table: exception_table,
+        attributes: attributes,
+    });
+}
+
 impl Deserialize for ExceptionTableRow {
     fn deserialize(data: &mut bytes::Buf) -> Result<ExceptionTableRow, ClassLoaderError> {
-        if data.remaining() < 8 {
-            return Err(ClassLoaderError::Eof("Unexpected end of stream while parsing exception table row".to_string()))
-        }
-
+        require!(data has 8 bytes for "exception table row");
         return Ok(ExceptionTableRow {
             start_pc: data.get_u16_be(),
             end_pc: data.get_u16_be(),
@@ -226,6 +263,7 @@ pub enum ClassLoaderError {
     InvalidConstantType(u8),
     InvalidMethodHandleKind(u8),
     InvalidAttributeType(Constant),
+    LengthMismatch{context: String, stated_length: u32, inferred_length: u32},
     Misc(String),
     UnknownAttributeType(String),
 }
@@ -245,6 +283,8 @@ impl fmt::Display for ClassLoaderError {
             ClassLoaderError::InvalidConstantType(ref tag) => write!(f, "Unsupported constant type {}", tag),
             ClassLoaderError::InvalidMethodHandleKind(ref kind) => write!(f, "Unsupported method handle kind {}", kind),
             ClassLoaderError::InvalidAttributeType(ref attribute_type) => write!(f, "Invalid attribute type {:#?}", attribute_type),
+            ClassLoaderError::LengthMismatch{ref context, ref stated_length, ref inferred_length} =>
+                write!(f, "Stated length of {} disagrees with inferred length. Inferred length: {}; stated length: {}", context, inferred_length, stated_length),
             ClassLoaderError::Misc(ref msg) => write!(f, "Unexpected error during class load: {}", msg),
             ClassLoaderError::UnknownAttributeType(ref type_name) => write!(f, "Unknown attribute type '{}'", type_name),
         }
@@ -260,6 +300,7 @@ impl error::Error for ClassLoaderError {
             ClassLoaderError::InvalidConstantType(..) => "Unsupported constant type",
             ClassLoaderError::InvalidMethodHandleKind(..) => "Unsupported method handle kind",
             ClassLoaderError::InvalidAttributeType(..) => "Invalid attribute type",
+            ClassLoaderError::LengthMismatch{..} => "Stated length of entity disagrees with inferred length",
             ClassLoaderError::Misc(ref msg) => msg,
             ClassLoaderError::UnknownAttributeType(..) => "Unknown attribute type",
         }
@@ -273,6 +314,7 @@ impl error::Error for ClassLoaderError {
             ClassLoaderError::InvalidConstantType(..) => None,
             ClassLoaderError::InvalidMethodHandleKind(..) => None,
             ClassLoaderError::InvalidAttributeType(..) => None,
+            ClassLoaderError::LengthMismatch{..} => None,
             ClassLoaderError::Misc(..) => None,
             ClassLoaderError::UnknownAttributeType(..) => None,
         }
@@ -1237,7 +1279,10 @@ mod tests {
             Attribute::deserialize,
             b"\x00\x01\x00\x00\x00\x00\xab\xcb",
             &vec![Constant::Utf8("ConstantValue".to_string())],
-            |_| ()  // Allow any error here
+            |err| match *err {
+                ClassLoaderError::LengthMismatch{..} => (),
+                _ => panic!("Expected LengthMismatch; got {}", err),
+            }
         );
     }
 
@@ -1247,7 +1292,10 @@ mod tests {
             Attribute::deserialize,
             b"\x00\x01\x00\x00\x00\x01\xab\xcb",
             &vec![Constant::Utf8("ConstantValue".to_string())],
-            |_| ()  // Allow any error here
+            |err| match *err {
+                ClassLoaderError::LengthMismatch{..} => (),
+                _ => panic!("Expected LengthMismatch; got {}", err),
+            }
         );
     }
 
@@ -1257,7 +1305,10 @@ mod tests {
             Attribute::deserialize,
             b"\x00\x01\x00\x00\x00\x03\xab\xcb",
             &vec![Constant::Utf8("ConstantValue".to_string())],
-            |_| ()  // Allow any error here
+            |err| match *err {
+                ClassLoaderError::LengthMismatch{..} => (),
+                _ => panic!("Expected LengthMismatch; got {}", err),
+            }
         );
     }
 
@@ -1267,7 +1318,10 @@ mod tests {
             Attribute::deserialize,
             b"\x00\x01\xff\xff\xff\xff\xab\xcb",
             &vec![Constant::Utf8("ConstantValue".to_string())],
-            |_| ()  // Allow any error here
+            |err| match *err {
+                ClassLoaderError::LengthMismatch{..} => (),
+                _ => panic!("Expected LengthMismatch; got {}", err),
+            }
         );
     }
 
@@ -1324,6 +1378,518 @@ mod tests {
     #[test]
     fn test_deserialize_exception_table_row_premature_termination_7() {
         assert_eof(ExceptionTableRow::deserialize, b"\x12\x34\x56\x78\x9a\xbc\xde");
+    }
+
+    #[test]
+    fn test_deserialize_trivial_code_block() {
+        let expected = Attribute::Code {
+            attribute_name: ConstantIndex(1),
+            max_stack: 0,
+            max_locals: 0,
+            code: vec![],
+            exception_table: vec![],
+            attributes: vec![]
+        };
+
+        let bytes = b"\x00\x01\x00\x00\x00\x0c\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00";
+        let constants = vec![Constant::Utf8("Code".to_string())];
+
+        assert_deserialize_with_constants(expected, bytes, &constants);
+    }
+
+    #[test]
+    fn test_deserialize_code_with_attribute_name_at_index_2() {
+        let expected = Attribute::Code {
+            attribute_name: ConstantIndex(2),
+            max_stack: 0,
+            max_locals: 0,
+            code: vec![],
+            exception_table: vec![],
+            attributes: vec![]
+        };
+
+        let bytes = b"\x00\x02\x00\x00\x00\x0c\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00";
+        let constants = vec![Constant::Utf8("Constant".to_string()), Constant::Utf8("Code".to_string())];
+
+        assert_deserialize_with_constants(expected, bytes, &constants);
+    }
+
+    #[test]
+    fn test_deserialize_code_with_max_stack_1() {
+        let expected = Attribute::Code {
+            attribute_name: ConstantIndex(1),
+            max_stack: 1,
+            max_locals: 0,
+            code: vec![],
+            exception_table: vec![],
+            attributes: vec![]
+        };
+
+        let bytes = b"\x00\x01\x00\x00\x00\x0c\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00";
+        let constants = vec![Constant::Utf8("Code".to_string())];
+
+        assert_deserialize_with_constants(expected, bytes, &constants);
+    }
+
+    #[test]
+    fn test_deserialize_code_with_max_stack_ffff() {
+        let expected = Attribute::Code {
+            attribute_name: ConstantIndex(1),
+            max_stack: 0xffff,
+            max_locals: 0,
+            code: vec![],
+            exception_table: vec![],
+            attributes: vec![]
+        };
+
+        let bytes = b"\x00\x01\x00\x00\x00\x0c\xff\xff\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00";
+        let constants = vec![Constant::Utf8("Code".to_string())];
+
+        assert_deserialize_with_constants(expected, bytes, &constants);
+    }
+
+    #[test]
+    fn test_deserialize_code_with_max_locals_1() {
+        let expected = Attribute::Code {
+            attribute_name: ConstantIndex(1),
+            max_stack: 0,
+            max_locals: 1,
+            code: vec![],
+            exception_table: vec![],
+            attributes: vec![]
+        };
+
+        let bytes = b"\x00\x01\x00\x00\x00\x0c\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00";
+        let constants = vec![Constant::Utf8("Code".to_string())];
+
+        assert_deserialize_with_constants(expected, bytes, &constants);
+    }
+
+    #[test]
+    fn test_deserialize_code_with_max_locals_ffff() {
+        let expected = Attribute::Code {
+            attribute_name: ConstantIndex(1),
+            max_stack: 0,
+            max_locals: 0xffff,
+            code: vec![],
+            exception_table: vec![],
+            attributes: vec![]
+        };
+
+        let bytes = b"\x00\x01\x00\x00\x00\x0c\x00\x00\xff\xff\x00\x00\x00\x00\x00\x00\x00\x00";
+        let constants = vec![Constant::Utf8("Code".to_string())];
+
+        assert_deserialize_with_constants(expected, bytes, &constants);
+    }
+
+    #[test]
+    fn test_deserialize_code_with_one_byte_of_code() {
+        let expected = Attribute::Code {
+            attribute_name: ConstantIndex(1),
+            max_stack: 0,
+            max_locals: 0,
+            code: vec![0xcd],
+            exception_table: vec![],
+            attributes: vec![]
+        };
+
+        let bytes = b"\x00\x01\x00\x00\x00\x0d\x00\x00\x00\x00\x00\x00\x00\x01\xcd\x00\x00\x00\x00";
+        let constants = vec![Constant::Utf8("Code".to_string())];
+
+        assert_deserialize_with_constants(expected, bytes, &constants);
+    }
+
+    #[test]
+    fn test_deserialize_code_with_ten_bytes_of_code() {
+        let expected = Attribute::Code {
+            attribute_name: ConstantIndex(1),
+            max_stack: 0,
+            max_locals: 0,
+            code: vec![0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xaa],
+            exception_table: vec![],
+            attributes: vec![]
+        };
+
+        let bytes = b"\x00\x01\x00\x00\x00\x16\x00\x00\x00\x00\x00\x00\x00\x0a\x11\x22\x33\x44\x55\x66\x77\x88\x99\xaa\x00\x00\x00\x00";
+        let constants = vec![Constant::Utf8("Code".to_string())];
+
+        assert_deserialize_with_constants(expected, bytes, &constants);
+    }
+
+    #[test]
+    #[ignore] // Takes a couple of minutes on my MBP 2018, so leaving ignored for now
+    fn test_deserialize_code_with_large_code_body() {
+        // Testing the maximum possible code body would take 4GB of memory, so we will settle for
+        // testing a body that requires four bytes to hold the size.
+        let mut code : Vec<u8> = vec![0; 0x01fffff3];
+        for idx in 0..0x01fffff3 {
+            // Arbitrary choice of bytes to fill up the vector
+            code[idx] = ((idx as u16) % 256) as u8
+        }
+
+        let expected = Attribute::Code {
+            attribute_name: ConstantIndex(1),
+            max_stack: 0,
+            max_locals: 0,
+            code: code.to_vec(),
+            exception_table: vec![],
+            attributes: vec![]
+        };
+
+        let mut bytes  = vec![];
+        bytes.append(&mut b"\x00\x01\x01\xff\xff\xff\x00\x00\x00\x00\x01\xff\xff\xf3".to_vec());
+        bytes.append(&mut code);
+        bytes.append(&mut b"\x00\x00\x00\x00".to_vec());
+        let constants = vec![Constant::Utf8("Code".to_string())];
+
+        assert_deserialize_with_constants(expected, &bytes, &constants);
+    }
+
+    #[test]
+    fn test_deserialize_code_with_one_exception_table_row() {
+        let expected = Attribute::Code {
+            attribute_name: ConstantIndex(1),
+            max_stack: 0,
+            max_locals: 0,
+            code: vec![],
+            exception_table: vec![
+                ExceptionTableRow{start_pc: 0, end_pc:0, handler_pc: 0, catch_type: ConstantIndex(0)},
+            ],
+            attributes: vec![]
+        };
+
+        let bytes = b"\x00\x01\x00\x00\x00\x14\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00";
+        let constants = vec![Constant::Utf8("Code".to_string())];
+
+        assert_deserialize_with_constants(expected, bytes, &constants);
+    }
+
+    #[test]
+    fn test_deserialize_code_with_nontrivial_exception_table_row() {
+        let expected = Attribute::Code {
+            attribute_name: ConstantIndex(1),
+            max_stack: 0,
+            max_locals: 0,
+            code: vec![],
+            exception_table: vec![
+                ExceptionTableRow{start_pc: 0xabcd, end_pc:0xcdef, handler_pc: 0xef12, catch_type: ConstantIndex(0x1234)},
+            ],
+            attributes: vec![]
+        };
+
+        let bytes = b"\x00\x01\x00\x00\x00\x14\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01\xab\xcd\xcd\xef\xef\x12\x12\x34\x00\x00";
+        let constants = vec![Constant::Utf8("Code".to_string())];
+
+        assert_deserialize_with_constants(expected, bytes, &constants);
+    }
+    #[test]
+    fn test_deserialize_code_with_65536_exception_table_rows() {
+        let mut exception_table = vec![];
+        for row in 0..0xffff as u16 {
+            exception_table.push(ExceptionTableRow {
+                // Values here are chosen arbitrarily to make rows distinct.
+                start_pc: row as u16,
+                end_pc: row.wrapping_add(1) as u16,
+                handler_pc: row.wrapping_add(2) as u16,
+                catch_type: ConstantIndex(row.wrapping_add(3) as u16),
+            });
+        }
+
+        let expected = Attribute::Code {
+            attribute_name: ConstantIndex(1),
+            max_stack: 0,
+            max_locals: 0,
+            code: vec![],
+            exception_table: exception_table,
+            attributes: vec![]
+        };
+
+        let mut bytes = b"\x00\x01\x00\x08\x00\x04\x00\x00\x00\x00\x00\x00\x00\x00\xff\xff".to_vec();
+        for row in 0..0xffff as u16 {
+            // Bit wrangling to produce ExceptionTableRow data that matches the contents of
+            // exception_table as defined at the start of this function.
+            bytes.push((row >> 8) as u8);
+            bytes.push(row as u8);
+            bytes.push((row.wrapping_add(1) >> 8) as u8);
+            bytes.push((row.wrapping_add(1) & 0x00ff) as u8);
+            bytes.push((row.wrapping_add(2) >> 8) as u8);
+            bytes.push((row.wrapping_add(2) & 0x00ff) as u8);
+            bytes.push((row.wrapping_add(3) >> 8) as u8);
+            bytes.push((row.wrapping_add(3) & 0x00ff) as u8);
+        }
+        bytes.push(0x00);
+        bytes.push(0x00);
+
+        let constants = vec![Constant::Utf8("Code".to_string())];
+        assert_deserialize_with_constants(expected, &bytes, &constants);
+    }
+
+    #[test]
+    fn test_deserialize_code_with_one_attribute() {
+        let expected = Attribute::Code {
+            attribute_name: ConstantIndex(1),
+            max_stack: 0,
+            max_locals: 0,
+            code: vec![],
+            exception_table: vec![],
+            attributes: vec![Attribute::ConstantValue{attribute_name: ConstantIndex(2), constant_value: ConstantIndex(0)}],
+        };
+
+        let bytes = b"\x00\x01\x00\x00\x00\x14\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01\x00\x02\x00\x00\x00\x02\x00\x00";
+        let constants = vec![Constant::Utf8("Code".to_string()), Constant::Utf8("ConstantValue".to_string())];
+
+        assert_deserialize_with_constants(expected, bytes, &constants);
+    }
+
+    #[test]
+    fn test_deserialize_code_with_65536_attributes() {
+        let mut attributes = vec![];
+        for idx in 0..0xffff {
+            attributes.push(Attribute::ConstantValue {
+                attribute_name: ConstantIndex(2),
+                constant_value: ConstantIndex(idx as u16), // Arbitrary choice so the constants are different
+            });
+        }
+
+        let expected = Attribute::Code {
+            attribute_name: ConstantIndex(1),
+            max_stack: 0,
+            max_locals: 0,
+            code: vec![],
+            exception_table: vec![],
+            attributes: attributes,
+        };
+
+        let mut bytes = b"\x00\x01\x00\x08\x00\x04\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xff\xff".to_vec();
+        for idx in 0..0xffff as u32 {
+            let value_index = idx % 0x10000;
+            bytes.append(&mut b"\x00\x02\x00\x00\x00\x02".to_vec());
+            bytes.push((value_index >> 8) as u8);
+            bytes.push(value_index as u8);
+        }
+
+        let constants = vec![Constant::Utf8("Code".to_string()), Constant::Utf8("ConstantValue".to_string())];
+
+        assert_deserialize_with_constants(expected, &bytes, &constants);
+    }
+
+    #[test]
+    fn test_deserialize_code_terminating_before_attribute_length_dword() {
+        assert_eof_with_constants(Attribute::deserialize, b"\x00\x01", &vec![Constant::Utf8("Code".to_string())]);
+    }
+
+    #[test]
+    fn test_deserialize_code_terminating_during_attribute_length_dword_1() {
+        assert_eof_with_constants(Attribute::deserialize, b"\x00\x01\x00", &vec![Constant::Utf8("Code".to_string())]);
+    }
+
+    #[test]
+    fn test_deserialize_code_terminating_during_attribute_length_dword_2() {
+        assert_eof_with_constants(Attribute::deserialize, b"\x00\x01\x00\x00", &vec![Constant::Utf8("Code".to_string())]);
+    }
+
+    #[test]
+    fn test_deserialize_code_terminating_during_attribute_length_dword_3() {
+        assert_eof_with_constants(Attribute::deserialize, b"\x00\x01\x00\x00\x00", &vec![Constant::Utf8("Code".to_string())]);
+    }
+
+    #[test]
+    fn test_deserialize_code_terminating_before_max_stack() {
+        assert_eof_with_constants(Attribute::deserialize, b"\x00\x01\x00\x00\x00\x00", &vec![Constant::Utf8("Code".to_string())]);
+    }
+
+    #[test]
+    fn test_deserialize_code_terminating_during_max_stack() {
+        assert_eof_with_constants(Attribute::deserialize, b"\x00\x01\x00\x00\x00\x01\x00", &vec![Constant::Utf8("Code".to_string())]);
+    }
+
+    #[test]
+    fn test_deserialize_code_terminating_before_max_locals() {
+        assert_eof_with_constants(Attribute::deserialize, b"\x00\x01\x00\x00\x00\x02\x00\x00", &vec![Constant::Utf8("Code".to_string())]);
+    }
+
+    #[test]
+    fn test_deserialize_code_terminating_during_max_locals() {
+        assert_eof_with_constants(Attribute::deserialize, b"\x00\x01\x00\x00\x00\x03\x00\x00\x00", &vec![Constant::Utf8("Code".to_string())]);
+    }
+
+    #[test]
+    fn test_deserialize_code_terminating_before_code_length() {
+        assert_eof_with_constants(Attribute::deserialize, b"\x00\x01\x00\x00\x00\x04\x00\x00\x00\x00", &vec![Constant::Utf8("Code".to_string())]);
+    }
+
+    #[test]
+    fn test_deserialize_code_terminating_during_code_length_1() {
+        assert_eof_with_constants(Attribute::deserialize, b"\x00\x01\x00\x00\x00\x05\x00\x00\x00\x00\x00", &vec![Constant::Utf8("Code".to_string())]);
+    }
+
+    #[test]
+    fn test_deserialize_code_terminating_during_code_length_2() {
+        assert_eof_with_constants(Attribute::deserialize, b"\x00\x01\x00\x00\x00\x06\x00\x00\x00\x00\x00\x00", &vec![Constant::Utf8("Code".to_string())]);
+    }
+
+    #[test]
+    fn test_deserialize_code_terminating_during_code_length_3() {
+        assert_eof_with_constants(Attribute::deserialize, b"\x00\x01\x00\x00\x00\x07\x00\x00\x00\x00\x00\x00\x00", &vec![Constant::Utf8("Code".to_string())]);
+    }
+
+    #[test]
+    fn test_deserialize_code_terminating_during_code_1() {
+        assert_eof_with_constants(Attribute::deserialize, b"\x00\x01\x00\x00\x00\x08\x00\x00\x00\x00\x00\x00\x00\x01", &vec![Constant::Utf8("Code".to_string())]);
+    }
+
+    #[test]
+    fn test_deserialize_code_terminating_during_code_2() {
+        assert_eof_with_constants(Attribute::deserialize, b"\x00\x01\x00\x00\x00\x09\x00\x00\x00\x00\x00\x00\x00\x02\xff", &vec![Constant::Utf8("Code".to_string())]);
+    }
+
+    #[test]
+    fn test_deserialize_code_terminating_during_code_3() {
+        assert_eof_with_constants(Attribute::deserialize, b"\x00\x01\x00\x00\x00\x0a\x00\x00\x00\x00\x00\x00\x00\x03\xff\xff", &vec![Constant::Utf8("Code".to_string())]);
+    }
+
+    #[test]
+    fn test_deserialize_code_terminating_before_exception_table_length() {
+        assert_eof_with_constants(Attribute::deserialize, b"\x00\x01\x00\x00\x00\x09\x00\x00\x00\x00\x00\x00\x00\x00", &vec![Constant::Utf8("Code".to_string())]);
+    }
+
+    #[test]
+    fn test_deserialize_code_terminating_during_exception_table_length() {
+        assert_eof_with_constants(Attribute::deserialize, b"\x00\x01\x00\x00\x00\x0a\x00\x00\x00\x00\x00\x00\x00\x00\xff", &vec![Constant::Utf8("Code".to_string())]);
+    }
+
+    #[test]
+    fn test_deserialize_code_terminating_before_exception_table() {
+        assert_eof_with_constants(Attribute::deserialize, b"\x00\x01\x00\x00\x00\x0b\x00\x00\x00\x00\x00\x00\x00\x00\xff\xff", &vec![Constant::Utf8("Code".to_string())]);
+    }
+
+    #[test]
+    fn test_deserialize_code_terminating_during_exception_table_inside_row() {
+        assert_eof_with_constants(Attribute::deserialize, b"\x00\x01\x00\x00\x00\x0d\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01\x12\x34", &vec![Constant::Utf8("Code".to_string())]);
+    }
+
+    #[test]
+    fn test_deserialize_code_terminating_during_exception_table_in_between_rows() {
+        // Declare that there are two exception rows, but EOF after the first
+        assert_eof_with_constants(
+            Attribute::deserialize,
+            b"\x00\x01\x00\x00\x00\x13\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x12\x34\x56\x78\x9a\xbc\xde\xf0",
+            &vec![Constant::Utf8("Code".to_string())]);
+    }
+
+    #[test]
+    fn test_deserialize_code_terminating_before_attribute_count() {
+        assert_eof_with_constants(
+            Attribute::deserialize,
+            b"\x00\x01\x00\x00\x00\x0b\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00",
+            &vec![Constant::Utf8("Code".to_string())]);
+    }
+
+    #[test]
+    fn test_deserialize_code_terminating_during_attribute_count() {
+        assert_eof_with_constants(
+            Attribute::deserialize,
+            b"\x00\x01\x00\x00\x00\x0c\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xff",
+            &vec![Constant::Utf8("Code".to_string())]);
+    }
+
+    #[test]
+    fn test_deserialize_code_terminating_before_attributes() {
+        assert_eof_with_constants(
+            Attribute::deserialize,
+            b"\x00\x01\x00\x00\x00\x0d\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\xff\xff",
+            &vec![Constant::Utf8("Code".to_string())]);
+    }
+
+    #[test]
+    fn test_deserialize_code_terminating_inside_attribute() {
+        assert_eof_with_constants(
+            Attribute::deserialize,
+            b"\x00\x01\x00\x00\x00\x0e\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01\x00\x01",
+            &vec![Constant::Utf8("Code".to_string())]);
+    }
+
+    #[test]
+    fn test_deserialize_code_terminating_between_attributes() {
+        // Declare that the Code attribute has two subattributes, but EOF after the first one.
+        assert_eof_with_constants(
+            Attribute::deserialize,
+            b"\x00\x01\x00\x00\x00\x15\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\x02\x00\x00\x00\x02\x00\x00",
+            &vec![Constant::Utf8("Code".to_string()), Constant::Utf8("ConstantValue".to_string())]);
+    }
+
+    #[test]
+    fn test_deserializing_trivial_code_with_declared_length_of_0_throws_error() {
+        deserialize_with_constants_expecting_error(
+            Attribute::deserialize,
+            b"\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00",
+            &vec![Constant::Utf8("Code".to_string())],
+            |err| match *err {
+                ClassLoaderError::LengthMismatch{..} => (),
+                _ => panic!("Expected length mismatch; got {}", err),
+            });
+    }
+
+    #[test]
+    fn test_deserializing_trivial_code_with_declared_length_of_0x0b_throws_error() {
+        // The correct length is 0x0c
+        deserialize_with_constants_expecting_error(
+            Attribute::deserialize,
+            b"\x00\x01\x00\x00\x00\x0b\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00",
+            &vec![Constant::Utf8("Code".to_string())],
+            |err| match *err {
+                ClassLoaderError::LengthMismatch{..} => (),
+                _ => panic!("Expected length mismatch; got {}", err),
+            });
+    }
+
+    #[test]
+    fn test_deserializing_trivial_code_with_declared_length_of_0x0d_throws_error() {
+        // The correct length is 0x0c
+        deserialize_with_constants_expecting_error(
+            Attribute::deserialize,
+            b"\x00\x01\x00\x00\x00\x0d\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00",
+            &vec![Constant::Utf8("Code".to_string())],
+            |err| match *err {
+                ClassLoaderError::LengthMismatch{..} => (),
+                _ => panic!("Expected length mismatch; got {}", err),
+            });
+    }
+
+    #[test]
+    fn test_deserializing_code_with_nonzero_body_and_declared_length_of_0x0c_throws_error() {
+        deserialize_with_constants_expecting_error(
+            Attribute::deserialize,
+            b"\x00\x01\x00\x00\x00\x0c\x00\x00\x00\x00\x00\x00\x00\x01\xff\x00\x00\x00\x00",
+            &vec![Constant::Utf8("Code".to_string())],
+            |err| match *err {
+                ClassLoaderError::LengthMismatch{..} => (),
+                _ => panic!("Expected length mismatch; got {}", err),
+            });
+    }
+
+    #[test]
+    fn test_deserializing_code_with_exception_table_and_declared_length_of_0x0c_throws_error() {
+        deserialize_with_constants_expecting_error(
+            Attribute::deserialize,
+            b"\x00\x01\x00\x00\x00\x0c\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00",
+            &vec![Constant::Utf8("Code".to_string())],
+            |err| match *err {
+                ClassLoaderError::LengthMismatch{..} => (),
+                _ => panic!("Expected length mismatch; got {}", err),
+            });
+    }
+
+    #[test]
+    fn test_deserializing_code_with_attribute_and_declared_length_of_0x0c_throws_error() {
+        deserialize_with_constants_expecting_error(
+            Attribute::deserialize,
+            b"\x00\x01\x00\x00\x00\x0c\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01\x00\x02\x00\x00\x00\x02\x00\x00",
+            &vec![Constant::Utf8("Code".to_string()), Constant::Utf8("ConstantValue".to_string())],
+            |err| match *err {
+                ClassLoaderError::LengthMismatch{..} => (),
+                _ => panic!("Expected length mismatch; got {}", err),
+            });
     }
 
     fn do_float_test(float_bits: u32, input: &[u8]) {
