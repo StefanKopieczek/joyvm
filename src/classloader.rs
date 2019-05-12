@@ -171,6 +171,7 @@ impl DeserializeWithConstants for Attribute {
         match attribute_type.as_ref() {
             "ConstantValue" => deserialize_constant_value(attribute_type_index, length, data),
             "Code" => deserialize_code(attribute_type_index, constants, length, data),
+            "StackMapTable" => deserialize_stack_map_table(attribute_type_index, length, data),
             _ => Err(ClassLoaderError::UnknownAttributeType(attribute_type.to_string()))
         }
     }
@@ -234,6 +235,28 @@ fn deserialize_code(attribute_name: ConstantIndex, constants: &Vec<Constant>, de
         exception_table: exception_table,
         attributes: attributes,
     })
+}
+
+fn deserialize_stack_map_table(attribute_name: ConstantIndex, declared_length: u32, data: &mut bytes::Buf) -> Result<Attribute, ClassLoaderError> {
+    let initial_bytes_remaining = data.remaining();
+
+    require!(data has 2 bytes for "stack map table entry count");
+    let num_entries = data.get_u16_be() as usize;
+    let entries = deserialize_multiple(num_entries, data)?;
+
+    let actual_length = (initial_bytes_remaining - data.remaining()) as u32;
+    if actual_length != declared_length {
+        return Err(ClassLoaderError::LengthMismatch {
+            context: "StackMapTable attribute".to_string(),
+            stated_length: declared_length,
+            inferred_length: actual_length,
+        });
+    }
+
+    return Ok(Attribute::StackMapTable {
+        attribute_name: attribute_name,
+        entries: entries,
+    });
 }
 
 impl Deserialize for ExceptionTableRow {
@@ -2556,6 +2579,249 @@ mod tests {
                 _ => panic!("Unexpected error; wanted InvalidStackFrameType, but got {:#?}", err),
             });
         }
+    }
+
+    #[test]
+    fn test_deserialize_empty_stack_map_table() {
+        let expected = Attribute::StackMapTable {
+            attribute_name: ConstantIndex(1),
+            entries: vec![],
+        };
+
+        let constants = vec![Constant::Utf8("StackMapTable".to_string())];
+        let bytes = b"\x00\x01\x00\x00\x00\x02\x00\x00";
+
+        assert_deserialize_with_constants(expected, bytes, &constants);
+    }
+
+    #[test]
+    fn test_deserialize_stack_map_table_with_different_constant_index() {
+        let expected = Attribute::StackMapTable {
+            attribute_name: ConstantIndex(3),
+            entries: vec![],
+        };
+
+        let constants = vec![Constant::Integer(1), Constant::Integer(2), Constant::Utf8("StackMapTable".to_string())];
+        let bytes = b"\x00\x03\x00\x00\x00\x02\x00\x00";
+
+        assert_deserialize_with_constants(expected, bytes, &constants);
+    }
+
+    #[test]
+    fn test_deserialize_stack_map_table_with_one_frame_of_type_same_frame() {
+        let expected = Attribute::StackMapTable {
+            attribute_name: ConstantIndex(1),
+            entries: vec![StackMapFrame::SameFrame {
+                offset_delta: 0x3f,
+            }],
+        };
+
+        let constants = vec![Constant::Utf8("StackMapTable".to_string())];
+        let bytes = b"\x00\x01\x00\x00\x00\x03\x00\x01\x3f";
+
+        assert_deserialize_with_constants(expected, bytes, &constants);
+    }
+
+    #[test]
+    fn test_deserialize_stack_map_table_with_one_frame_of_type_full_frame() {
+        let expected = Attribute::StackMapTable {
+            attribute_name: ConstantIndex(1),
+            entries: vec![StackMapFrame::FullFrame {
+                offset_delta: 0x72,
+                locals: vec![VerificationType::Integer, VerificationType::Top],
+                stack_items: vec![VerificationType::Null],
+            }],
+        };
+
+        let constants = vec![Constant::Utf8("StackMapTable".to_string())];
+        let bytes = b"\x00\x01\x00\x00\x00\x0c\x00\x01\xff\x00\x72\x00\x02\x01\x00\x00\x01\x05";
+
+        assert_deserialize_with_constants(expected, bytes, &constants);
+    }
+
+    #[test]
+    fn test_deserialize_stack_map_table_with_several_frames() {
+        let expected = Attribute::StackMapTable {
+            attribute_name: ConstantIndex(1),
+            entries: vec![
+                StackMapFrame::FullFrame {
+                    offset_delta: 0x40,
+                    locals: vec![VerificationType::Integer, VerificationType::Float],
+                    stack_items: vec![],
+                },
+                StackMapFrame::ChopFrame {
+                    offset_delta: 0x50,
+                    num_absent_locals: 1,
+                },
+                StackMapFrame::AppendFrame {
+                    offset_delta: 0x5f,
+                    new_locals: vec![VerificationType::Null],
+                },
+            ],
+        };
+
+        let constants = vec![Constant::Utf8("StackMapTable".to_string())];
+        let bytes = b"\x00\x01\x00\x00\x00\x12\x00\x03\xff\x00\x40\x00\x02\x01\x02\x00\x00\xfa\x00\x50\xfc\x00\x5f\x05";
+
+        assert_deserialize_with_constants(expected, bytes, &constants);
+    }
+
+    #[test]
+    fn test_deserialize_stack_map_table_premature_termination_during_attribute_length_1() {
+        let constants = vec![Constant::Utf8("StackMapTable".to_string())];
+        assert_eof_with_constants(Attribute::deserialize, b"\x00\x01", &constants);
+    }
+
+    #[test]
+    fn test_deserialize_stack_map_table_premature_termination_during_attribute_length_2() {
+        let constants = vec![Constant::Utf8("StackMapTable".to_string())];
+        assert_eof_with_constants(Attribute::deserialize, b"\x00\x01\x00", &constants);
+    }
+
+    #[test]
+    fn test_deserialize_stack_map_table_premature_termination_during_attribute_length_3() {
+        let constants = vec![Constant::Utf8("StackMapTable".to_string())];
+        assert_eof_with_constants(Attribute::deserialize, b"\x00\x01\x00\x00", &constants);
+    }
+
+    #[test]
+    fn test_deserialize_stack_map_table_premature_termination_during_attribute_length_4() {
+        let constants = vec![Constant::Utf8("StackMapTable".to_string())];
+        assert_eof_with_constants(Attribute::deserialize, b"\x00\x01\x00\x00\x00", &constants);
+    }
+
+    #[test]
+    fn test_deserialize_stack_map_table_premature_termination_during_entry_count_1() {
+        let constants = vec![Constant::Utf8("StackMapTable".to_string())];
+        assert_eof_with_constants(Attribute::deserialize, b"\x00\x01\x00\x00\x00\x00", &constants);
+    }
+
+    #[test]
+    fn test_deserialize_stack_map_table_premature_termination_during_entry_count_2() {
+        let constants = vec![Constant::Utf8("StackMapTable".to_string())];
+        assert_eof_with_constants(Attribute::deserialize, b"\x00\x01\x00\x00\x00\x01\x00", &constants);
+    }
+
+    #[test]
+    fn test_deserialize_stack_map_table_premature_termination_before_entries() {
+        let constants = vec![Constant::Utf8("StackMapTable".to_string())];
+        assert_eof_with_constants(Attribute::deserialize, b"\x00\x01\x00\x00\x00\x02\x00\x01", &constants);
+    }
+
+    #[test]
+    fn test_deserialize_stack_map_table_premature_termination_during_entry() {
+        let constants = vec![Constant::Utf8("StackMapTable".to_string())];
+        assert_eof_with_constants(Attribute::deserialize, b"\x00\x01\x00\x00\x00\x03\x00\x01\xff", &constants);
+    }
+
+    #[test]
+    fn test_deserialize_stack_map_table_premature_termination_between_entries() {
+        let constants = vec![Constant::Utf8("StackMapTable".to_string())];
+        assert_eof_with_constants(Attribute::deserialize, b"\x00\x01\x00\x00\x00\x03\x00\x02\x00", &constants);
+    }
+
+    #[test]
+    fn test_deserialize_stack_map_table_errors_if_declared_length_is_zero() {
+        let constants = vec![Constant::Utf8("StackMapTable".to_string())];
+        deserialize_with_constants_expecting_error(
+            Attribute::deserialize,
+            b"\x00\x01\x00\x00\x00\x00\x00\x00",
+            &constants,
+            |err| match *err {
+                ClassLoaderError::LengthMismatch{..} => (),
+                _ => panic!("Unexpected error; expected LengthMismatch; got {:#?}", err),
+            });
+    }
+
+    #[test]
+    fn test_deserialize_stack_map_table_errors_if_declared_length_is_one() {
+        let constants = vec![Constant::Utf8("StackMapTable".to_string())];
+        deserialize_with_constants_expecting_error(
+            Attribute::deserialize,
+            b"\x00\x01\x00\x00\x00\x01\x00\x00",
+            &constants,
+            |err| match *err {
+                ClassLoaderError::LengthMismatch{..} => (),
+                _ => panic!("Unexpected error; expected LengthMismatch; got {:#?}", err),
+            });
+    }
+
+    #[test]
+    fn test_deserialize_stack_map_table_errors_if_declared_length_is_shorter_than_one_byte_table() {
+        let constants = vec![Constant::Utf8("StackMapTable".to_string())];
+        deserialize_with_constants_expecting_error(
+            Attribute::deserialize,
+            b"\x00\x01\x00\x00\x00\x02\x00\x01\x01",
+            &constants,
+            |err| match *err {
+                ClassLoaderError::LengthMismatch{..} => (),
+                _ => panic!("Unexpected error; expected LengthMismatch; got {:#?}", err),
+            });
+    }
+
+    #[test]
+    fn test_deserialize_stack_map_table_errors_if_declared_length_is_longer_than_one_byte_table() {
+        let constants = vec![Constant::Utf8("StackMapTable".to_string())];
+        deserialize_with_constants_expecting_error(
+            Attribute::deserialize,
+            b"\x00\x01\x00\x00\x00\x04\x00\x01\x01",
+            &constants,
+            |err| match *err {
+                ClassLoaderError::LengthMismatch{..} => (),
+                _ => panic!("Unexpected error; expected LengthMismatch; got {:#?}", err),
+            });
+    }
+
+    #[test]
+    fn test_deserialize_stack_map_table_errors_if_declared_length_is_shorter_than_long_single_entry_table() {
+        let constants = vec![Constant::Utf8("StackMapTable".to_string())];
+        deserialize_with_constants_expecting_error(
+            Attribute::deserialize,
+            b"\x00\x01\x00\x00\x00\x0d\x00\x01\xff\xab\xcd\x00\x02\x00\x05\x00\x03\x01\x00\x02",
+            &constants,
+            |err| match *err {
+                ClassLoaderError::LengthMismatch{..} => (),
+                _ => panic!("Unexpected error; expected LengthMismatch; got {:#?}", err),
+            });
+    }
+
+    #[test]
+    fn test_deserialize_stack_map_table_errors_if_declared_length_is_longer_than_long_single_entry_table() {
+        let constants = vec![Constant::Utf8("StackMapTable".to_string())];
+        deserialize_with_constants_expecting_error(
+            Attribute::deserialize,
+            b"\x00\x01\x00\x00\x00\x0f\x00\x01\xff\xab\xcd\x00\x02\x00\x05\x00\x03\x01\x00\x02",
+            &constants,
+            |err| match *err {
+                ClassLoaderError::LengthMismatch{..} => (),
+                _ => panic!("Unexpected error; expected LengthMismatch; got {:#?}", err),
+            });
+    }
+
+    #[test]
+    fn test_deserialize_stack_map_table_errors_if_declared_length_is_shorter_than_multi_entry_table() {
+        let constants = vec![Constant::Utf8("StackMapTable".to_string())];
+        deserialize_with_constants_expecting_error(
+            Attribute::deserialize,
+            b"\x00\x01\x00\x00\x00\x0f\x00\x03\x02\xff\xab\xcd\x00\x03\x01\x00\x02\x00\x02\x00\x05\x3e",
+            &constants,
+            |err| match *err {
+                ClassLoaderError::LengthMismatch{..} => (),
+                _ => panic!("Unexpected error; expected LengthMismatch; got {:#?}", err),
+            });
+    }
+
+    #[test]
+    fn test_deserialize_stack_map_table_errors_if_declared_length_is_longer_than_multi_entry_table() {
+        let constants = vec![Constant::Utf8("StackMapTable".to_string())];
+        deserialize_with_constants_expecting_error(
+            Attribute::deserialize,
+            b"\x00\x01\x00\x00\x00\x11\x00\x03\x02\xff\xab\xcd\x00\x03\x01\x00\x02\x00\x02\x00\x05\x3e",
+            &constants,
+            |err| match *err {
+                ClassLoaderError::LengthMismatch{..} => (),
+                _ => panic!("Unexpected error; expected LengthMismatch; got {:#?}", err),
+            });
     }
 
     fn do_float_test(float_bits: u32, input: &[u8]) {
