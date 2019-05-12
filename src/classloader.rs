@@ -254,6 +254,80 @@ impl Deserialize for ExceptionTableRow {
     }
 }
 
+impl Deserialize for StackMapFrame {
+    fn deserialize(data: &mut bytes::Buf) -> Result<StackMapFrame, ClassLoaderError> {
+        require!(data has 1 byte for "stack map frame type");
+        let frame_type = data.get_u8();
+        match frame_type {
+            0...63 => Ok(StackMapFrame::SameFrame{offset_delta: frame_type}),
+            64...127 => Ok(StackMapFrame::SameLocalsOneStackItemFrame {
+                offset_delta: frame_type - 64,
+                stack_item: VerificationType::deserialize(data)?,
+            }),
+            247 => {
+                require!(data has 2 bytes for "extended stack frame offset");
+                Ok(StackMapFrame::SameLocalsOneStackItemFrameExtended {
+                    offset_delta: data.get_u16_be(),
+                    stack_item: VerificationType::deserialize(data)?,
+                })
+            },
+            248...250 => {
+                require!(data has 2 bytes for "chop frame offset");
+                Ok(StackMapFrame::ChopFrame {
+                    offset_delta: data.get_u16_be(),
+                    num_absent_locals: 251 - frame_type,
+                })
+            },
+            251 => {
+                require!(data has 2 bytes for "extended same-frame stack frame offset");
+                Ok(StackMapFrame::SameFrameExtended {
+                    offset_delta: data.get_u16_be(),
+                })
+            },
+            252...254 => {
+                require!(data has 2 bytes for "append frame offset");
+                let offset_delta = data.get_u16_be();
+
+                let num_locals = frame_type - 251;
+                let mut locals = vec![];
+                for _ in 0..num_locals {
+                    locals.push(VerificationType::deserialize(data)?);
+                }
+
+                Ok(StackMapFrame::AppendFrame {
+                    offset_delta: offset_delta,
+                    new_locals: locals,
+                })
+            },
+            255 => {
+                require!(data has 2 bytes for "full stack frame offset");
+                let offset_delta = data.get_u16_be();
+
+                require!(data has 2 bytes for "full stack frame locals count");
+                let num_locals = data.get_u16_be();
+                let mut locals = vec![];
+                for _ in 0..num_locals {
+                    locals.push(VerificationType::deserialize(data)?);
+                }
+
+                require!(data has 2 bytes for "full stack frame stack item count");
+                let num_stack_items = data.get_u16_be();
+                let mut stack_items = vec![];
+                for _ in 0..num_stack_items {
+                    stack_items.push(VerificationType::deserialize(data)?);
+                }
+
+                Ok(StackMapFrame::FullFrame {
+                    offset_delta: offset_delta,
+                    locals: locals,
+                    stack_items: stack_items,
+                })
+            },
+            _ => Err(ClassLoaderError::InvalidStackFrameType(frame_type)),
+        }
+    }
+}
+
 impl Deserialize for VerificationType {
     fn deserialize(data: &mut bytes::Buf) -> Result<VerificationType, ClassLoaderError> {
         require!(data has 1 byte for "verification type identifier");
@@ -284,6 +358,7 @@ pub enum ClassLoaderError {
     InvalidConstantType(u8),
     InvalidMethodHandleKind(u8),
     InvalidAttributeType(Constant),
+    InvalidStackFrameType(u8),
     InvalidVerificationType(u8),
     LengthMismatch{context: String, stated_length: u32, inferred_length: u32},
     Misc(String),
@@ -305,7 +380,8 @@ impl fmt::Display for ClassLoaderError {
             ClassLoaderError::InvalidConstantType(ref tag) => write!(f, "Unsupported constant type {}", tag),
             ClassLoaderError::InvalidMethodHandleKind(ref kind) => write!(f, "Unsupported method handle kind {}", kind),
             ClassLoaderError::InvalidAttributeType(ref attribute_type) => write!(f, "Invalid attribute type {:#?}", attribute_type),
-            ClassLoaderError::InvalidVerificationType(ref verification_type_tag) => write!(f, "Invalid verification type tag: {}", verification_type_tag),
+            ClassLoaderError::InvalidVerificationType(ref verification_type_tag) => write!(f, "Invalid verification type tag {:#?}", verification_type_tag),
+            ClassLoaderError::InvalidStackFrameType(ref frame_type) => write!(f, "Invalid stack frame type {:#?}", frame_type),
             ClassLoaderError::LengthMismatch{ref context, ref stated_length, ref inferred_length} =>
                 write!(f, "Stated length of {} disagrees with inferred length. Inferred length: {}; stated length: {}", context, inferred_length, stated_length),
             ClassLoaderError::Misc(ref msg) => write!(f, "Unexpected error during class load: {}", msg),
@@ -324,6 +400,7 @@ impl error::Error for ClassLoaderError {
             ClassLoaderError::InvalidMethodHandleKind(..) => "Unsupported method handle kind",
             ClassLoaderError::InvalidAttributeType(..) => "Invalid attribute type",
             ClassLoaderError::InvalidVerificationType(..) => "Invalid verification type",
+            ClassLoaderError::InvalidStackFrameType(..) => "Invalid stack frame type",
             ClassLoaderError::LengthMismatch{..} => "Stated length of entity disagrees with inferred length",
             ClassLoaderError::Misc(ref msg) => msg,
             ClassLoaderError::UnknownAttributeType(..) => "Unknown attribute type",
@@ -339,6 +416,7 @@ impl error::Error for ClassLoaderError {
             ClassLoaderError::InvalidMethodHandleKind(..) => None,
             ClassLoaderError::InvalidAttributeType(..) => None,
             ClassLoaderError::InvalidVerificationType(..) => None,
+            ClassLoaderError::InvalidStackFrameType(..) => None,
             ClassLoaderError::LengthMismatch{..} => None,
             ClassLoaderError::Misc(..) => None,
             ClassLoaderError::UnknownAttributeType(..) => None,
@@ -2021,6 +2099,460 @@ mod tests {
             ClassLoaderError::InvalidVerificationType(..) => (),
             _ => panic!("Expected InvalidVerificationType but got {}", err),
         });
+    }
+
+    #[test]
+    fn test_deserialize_stack_map_frame_of_type_same_frame_with_offset_0() {
+        assert_deserialize(StackMapFrame::SameFrame{offset_delta: 0}, b"\x00");
+    }
+
+    #[test]
+    fn test_deserialize_stack_map_frame_of_type_same_frame_with_offset_1() {
+        assert_deserialize(StackMapFrame::SameFrame{offset_delta: 1}, b"\x01");
+    }
+
+    #[test]
+    fn test_deserialize_stack_map_frame_of_type_same_frame_with_offset_0x3f() {
+        assert_deserialize(StackMapFrame::SameFrame{offset_delta: 0x3f}, b"\x3f");
+    }
+
+    #[test]
+    fn test_deserialize_stack_map_frame_empty_stream() {
+        assert_eof(StackMapFrame::deserialize, b"");
+    }
+
+    #[test]
+    fn test_deserialize_stack_map_frame_of_type_same_locals_one_stack_item_frame_with_offset_0_and_integer_on_stack() {
+        assert_deserialize(StackMapFrame::SameLocalsOneStackItemFrame {
+            offset_delta: 0,
+            stack_item: VerificationType::Integer
+        }, b"\x40\x01");
+    }
+
+    #[test]
+    fn test_deserialize_stack_map_frame_of_type_same_locals_one_stack_item_frame_with_offset_0_and_double_on_stack() {
+        assert_deserialize(StackMapFrame::SameLocalsOneStackItemFrame {
+            offset_delta: 0,
+            stack_item: VerificationType::Double
+        }, b"\x40\x03");
+    }
+
+    #[test]
+    fn test_deserialize_stack_map_frame_of_type_same_locals_one_stack_item_frame_with_offset_0_and_object_on_stack() {
+        assert_deserialize(StackMapFrame::SameLocalsOneStackItemFrame {
+            offset_delta: 0,
+            stack_item: VerificationType::Object(ConstantIndex(0x1234)),
+        }, b"\x40\x07\x12\x34");
+    }
+
+    #[test]
+    fn test_deserialize_stack_map_frame_of_type_same_locals_one_stack_item_frame_with_offset_0_and_uninitialized_item_on_stack() {
+        assert_deserialize(StackMapFrame::SameLocalsOneStackItemFrame {
+            offset_delta: 0,
+            stack_item: VerificationType::Uninitialized(0xabcd),
+        }, b"\x40\x08\xab\xcd");
+    }
+
+    #[test]
+    fn test_deserialize_stack_map_frame_of_type_same_locals_one_stack_item_frame_with_offset_17() {
+        assert_deserialize(StackMapFrame::SameLocalsOneStackItemFrame {
+            offset_delta: 17,
+            stack_item: VerificationType::Double
+        }, b"\x51\x03");
+    }
+
+    #[test]
+    fn test_deserialize_stack_map_frame_of_type_same_locals_one_stack_item_frame_with_offset_63() {
+        assert_deserialize(StackMapFrame::SameLocalsOneStackItemFrame {
+            offset_delta: 63,
+            stack_item: VerificationType::Double
+        }, b"\x7f\x03");
+    }
+
+    #[test]
+    fn test_deserialize_stack_map_frame_of_type_same_locals_premature_termination_1() {
+        assert_eof(StackMapFrame::deserialize, b"\x40");
+    }
+
+    #[test]
+    fn test_deserialize_stack_map_frame_of_type_same_locals_premature_termination_2() {
+        assert_eof(StackMapFrame::deserialize, b"\x40\x08");
+    }
+
+    #[test]
+    fn test_deserialize_stack_map_frame_of_type_same_locals_premature_termination_3() {
+        assert_eof(StackMapFrame::deserialize, b"\x40\x08\x12");
+    }
+
+    #[test]
+    fn test_deserialize_stack_map_frame_of_type_same_locals_one_stack_item_frame_extended_with_offset_0_and_stack_item_null() {
+        assert_deserialize(StackMapFrame::SameLocalsOneStackItemFrameExtended {
+            offset_delta: 0,
+            stack_item: VerificationType::Null,
+        }, b"\xf7\x00\x00\x05");
+    }
+
+    #[test]
+    fn test_deserialize_stack_map_frame_of_type_same_locals_one_stack_item_frame_extended_with_offset_0_and_stack_item_top() {
+        assert_deserialize(StackMapFrame::SameLocalsOneStackItemFrameExtended {
+            offset_delta: 0,
+            stack_item: VerificationType::Top,
+        }, b"\xf7\x00\x00\x00");
+    }
+
+    #[test]
+    fn test_deserialize_stack_map_frame_of_type_same_locals_one_stack_item_frame_extended_with_offset_1() {
+        assert_deserialize(StackMapFrame::SameLocalsOneStackItemFrameExtended {
+            offset_delta: 1,
+            stack_item: VerificationType::Top,
+        }, b"\xf7\x00\x01\x00");
+    }
+
+    #[test]
+    fn test_deserialize_stack_map_frame_of_type_same_locals_one_stack_item_frame_extended_with_offset_0xabcd() {
+        assert_deserialize(StackMapFrame::SameLocalsOneStackItemFrameExtended {
+            offset_delta: 0xabcd,
+            stack_item: VerificationType::Top,
+        }, b"\xf7\xab\xcd\x00");
+    }
+
+    #[test]
+    fn test_deserialize_stack_map_frame_of_type_same_locals_one_stack_item_frame_extended_premature_termination_1() {
+        assert_eof(StackMapFrame::deserialize, b"\xf7");
+    }
+
+    #[test]
+    fn test_deserialize_stack_map_frame_of_type_same_locals_one_stack_item_frame_extended_premature_termination_2() {
+        assert_eof(StackMapFrame::deserialize, b"\xf7\xab");
+    }
+
+    #[test]
+    fn test_deserialize_stack_map_frame_of_type_same_locals_one_stack_item_frame_extended_premature_termination_3() {
+        assert_eof(StackMapFrame::deserialize, b"\xf7\xab\xcd");
+    }
+
+    #[test]
+    fn test_deserialize_stack_map_frame_of_type_same_locals_one_stack_item_frame_extended_premature_termination_4() {
+        assert_eof(StackMapFrame::deserialize, b"\xf7\xab\xcd\x08");
+    }
+
+    #[test]
+    fn test_deserialize_stack_map_frame_of_type_chop_frame_with_delta_0_and_1_absent_local() {
+        assert_deserialize(StackMapFrame::ChopFrame {
+            offset_delta: 0,
+            num_absent_locals: 1,
+        }, b"\xfa\x00\x00");
+    }
+
+    #[test]
+    fn test_deserialize_stack_map_frame_of_type_chop_frame_with_delta_0_and_2_absent_locals() {
+        assert_deserialize(StackMapFrame::ChopFrame {
+            offset_delta: 0,
+            num_absent_locals: 2,
+        }, b"\xf9\x00\x00");
+    }
+
+    #[test]
+    fn test_deserialize_stack_map_frame_of_type_chop_frame_with_delta_0_and_3_absent_locals() {
+        assert_deserialize(StackMapFrame::ChopFrame {
+            offset_delta: 0,
+            num_absent_locals: 3,
+        }, b"\xf8\x00\x00");
+    }
+
+    #[test]
+    fn test_deserialize_stack_map_frame_of_type_chop_frame_with_delta_0x1234_and_2_absent_locals() {
+        assert_deserialize(StackMapFrame::ChopFrame {
+            offset_delta: 0x1234,
+            num_absent_locals: 2,
+        }, b"\xf9\x12\x34");
+    }
+
+    #[test]
+    fn test_deserialize_stack_map_frame_of_type_chop_frame_premature_termination_1() {
+        assert_eof(StackMapFrame::deserialize, b"\xf8");
+        assert_eof(StackMapFrame::deserialize, b"\xf9");
+        assert_eof(StackMapFrame::deserialize, b"\xfa");
+    }
+
+    #[test]
+    fn test_deserialize_stack_map_frame_of_type_chop_frame_premature_termination_2() {
+        assert_eof(StackMapFrame::deserialize, b"\xf8\xab");
+        assert_eof(StackMapFrame::deserialize, b"\xf9\xab");
+        assert_eof(StackMapFrame::deserialize, b"\xfa\xab");
+    }
+
+    #[test]
+    fn test_deserialize_stack_map_frame_of_type_same_frame_extended_with_offset_0() {
+        assert_deserialize(StackMapFrame::SameFrameExtended{offset_delta: 0}, b"\xfb\x00\x00");
+    }
+
+    #[test]
+    fn test_deserialize_stack_map_frame_of_type_same_frame_extended_with_offset_1() {
+        assert_deserialize(StackMapFrame::SameFrameExtended{offset_delta: 1}, b"\xfb\x00\x01");
+    }
+
+    #[test]
+    fn test_deserialize_stack_map_frame_of_type_same_frame_extended_with_offset_0xffff() {
+        assert_deserialize(StackMapFrame::SameFrameExtended{offset_delta: 0xffff}, b"\xfb\xff\xff");
+    }
+
+    #[test]
+    fn test_deserialize_stack_map_frame_of_type_same_frame_premature_termination_1() {
+        assert_eof(StackMapFrame::deserialize, b"\xfb");
+    }
+
+    #[test]
+    fn test_deserialize_stack_map_frame_of_type_same_frame_premature_termination_2() {
+        assert_eof(StackMapFrame::deserialize, b"\xfb\x01");
+    }
+
+    #[test]
+    fn test_deserialize_stack_map_frame_of_type_append_frame_with_offset_0_and_1_new_local_of_type_integer() {
+        assert_deserialize(StackMapFrame::AppendFrame {
+            offset_delta: 0,
+            new_locals: vec![VerificationType::Integer],
+        }, b"\xfc\x00\x00\x01");
+    }
+
+    #[test]
+    fn test_deserialize_stack_map_frame_of_type_append_frame_with_offset_0xffff_and_1_new_local_of_type_integer() {
+        assert_deserialize(StackMapFrame::AppendFrame {
+            offset_delta: 0xffff,
+            new_locals: vec![VerificationType::Integer],
+        }, b"\xfc\xff\xff\x01");
+    }
+
+    #[test]
+    fn test_deserialize_stack_map_frame_of_type_append_frame_with_offset_0_and_1_new_local_of_type_object() {
+        assert_deserialize(StackMapFrame::AppendFrame {
+            offset_delta: 0,
+            new_locals: vec![VerificationType::Object(ConstantIndex(0xbeef))],
+        }, b"\xfc\x00\x00\x07\xbe\xef");
+    }
+
+    #[test]
+    fn test_deserialize_stack_map_frame_of_type_append_frame_with_two_locals() {
+        assert_deserialize(StackMapFrame::AppendFrame {
+            offset_delta: 0,
+            new_locals: vec![VerificationType::Integer, VerificationType::Long],
+        }, b"\xfd\x00\x00\x01\x04");
+    }
+
+    #[test]
+    fn test_deserialize_stack_map_frame_of_type_append_frame_with_two_nontrivial_locals() {
+        assert_deserialize(StackMapFrame::AppendFrame {
+            offset_delta: 0,
+            new_locals: vec![VerificationType::Object(ConstantIndex(0xdead)), VerificationType::Uninitialized(0xbeef)],
+        }, b"\xfd\x00\x00\x07\xde\xad\x08\xbe\xef");
+    }
+
+    #[test]
+    fn test_deserialize_stack_map_frame_of_type_append_frame_with_three_locals() {
+        assert_deserialize(StackMapFrame::AppendFrame {
+            offset_delta: 0,
+            new_locals: vec![
+                VerificationType::Uninitialized(0x1234),
+                VerificationType::Object(ConstantIndex(0x5678)),
+                VerificationType::Uninitialized(0x789a),
+            ]}, b"\xfe\x00\x00\x08\x12\x34\x07\x56\x78\x08\x78\x9a");
+    }
+
+    #[test]
+    fn test_deserialize_stack_map_frame_of_type_append_premature_termination_1() {
+        assert_eof(StackMapFrame::deserialize, b"\xfc");
+    }
+
+    #[test]
+    fn test_deserialize_stack_map_frame_of_type_append_premature_termination_2() {
+        assert_eof(StackMapFrame::deserialize, b"\xfc\x00");
+    }
+
+    #[test]
+    fn test_deserialize_stack_map_frame_of_type_append_premature_termination_3() {
+        assert_eof(StackMapFrame::deserialize, b"\xfc\x00\x00");
+    }
+
+    #[test]
+    fn test_deserialize_stack_map_frame_of_type_append_premature_termination_4() {
+        assert_eof(StackMapFrame::deserialize, b"\xfc\x00\x00\x07");
+    }
+
+    #[test]
+    fn test_deserialize_stack_map_frame_of_type_append_premature_termination_5() {
+        assert_eof(StackMapFrame::deserialize, b"\xfc\x00\x00\x07\x00");
+    }
+
+    #[test]
+    fn test_deserialize_stack_map_frame_of_type_append_premature_termination_6() {
+        assert_eof(StackMapFrame::deserialize, b"\xfd\x00\x00\x07\x00\x00");
+    }
+
+    #[test]
+    fn test_deserialize_stack_map_frame_of_type_append_premature_termination_7() {
+        assert_eof(StackMapFrame::deserialize, b"\xfe\x00\x00\x07\x00\x00\x01");
+    }
+
+    #[test]
+    fn test_deserialize_stack_map_frame_of_type_full_frame_with_trivial_contents() {
+        assert_deserialize(StackMapFrame::FullFrame {
+            offset_delta: 0,
+            locals: vec![],
+            stack_items: vec![],
+        }, b"\xff\x00\x00\x00\x00\x00\x00");
+    }
+
+    #[test]
+    fn test_deserialize_stack_map_frame_of_type_full_frame_with_offset_delta_of_1() {
+        assert_deserialize(StackMapFrame::FullFrame {
+            offset_delta: 1,
+            locals: vec![],
+            stack_items: vec![],
+        }, b"\xff\x00\x01\x00\x00\x00\x00");
+    }
+
+    #[test]
+    fn test_deserialize_stack_map_frame_of_type_full_frame_with_offset_delta_of_ffff() {
+        assert_deserialize(StackMapFrame::FullFrame {
+            offset_delta: 0xffff,
+            locals: vec![],
+            stack_items: vec![],
+        }, b"\xff\xff\xff\x00\x00\x00\x00");
+    }
+
+    #[test]
+    fn test_deserialize_stack_map_frame_of_type_full_frame_with_one_local() {
+        assert_deserialize(StackMapFrame::FullFrame {
+            offset_delta: 0,
+            locals: vec![VerificationType::Null],
+            stack_items: vec![],
+        }, b"\xff\x00\x00\x00\x01\x05\x00\x00");
+    }
+
+    #[test]
+    fn test_deserialize_stack_map_frame_of_type_full_frame_with_5_locals() {
+        assert_deserialize(StackMapFrame::FullFrame {
+            offset_delta: 0,
+            locals: vec![
+                VerificationType::Null,
+                VerificationType::Integer,
+                VerificationType::Uninitialized(0xcafe),
+                VerificationType::Long,
+                VerificationType::Top],
+            stack_items: vec![],
+        }, b"\xff\x00\x00\x00\x05\x05\x01\x08\xca\xfe\x04\x00\x00\x00");
+    }
+
+    #[test]
+    fn test_deserialize_stack_map_frame_of_type_full_frame_with_one_stack_item() {
+        assert_deserialize(StackMapFrame::FullFrame {
+            offset_delta: 0,
+            locals: vec![],
+            stack_items: vec![VerificationType::Null],
+        }, b"\xff\x00\x00\x00\x00\x00\x01\x05");
+    }
+
+    #[test]
+    fn test_deserialize_stack_map_frame_of_type_full_frame_with_5_stack_items() {
+        assert_deserialize(StackMapFrame::FullFrame {
+            offset_delta: 0,
+            locals: vec![],
+            stack_items: vec![
+                VerificationType::Null,
+                VerificationType::Integer,
+                VerificationType::Uninitialized(0xcafe),
+                VerificationType::Long,
+                VerificationType::Top],
+        }, b"\xff\x00\x00\x00\x00\x00\x05\x05\x01\x08\xca\xfe\x04\x00");
+    }
+
+    #[test]
+    fn test_deserialize_stack_map_frame_of_type_full_frame_with_locals_and_stack_items() {
+        assert_deserialize(StackMapFrame::FullFrame {
+            offset_delta: 0,
+            locals: vec![
+                VerificationType::Float,
+                VerificationType::Long,
+                VerificationType::Top,
+                VerificationType::Object(ConstantIndex(0xbaba))],
+            stack_items: vec![
+                VerificationType::Uninitialized(0x1234),
+                VerificationType::Null]
+        }, b"\xff\x00\x00\x00\x04\x02\x04\x00\x07\xba\xba\x00\x02\x08\x12\x34\x05");
+    }
+
+    #[test]
+    fn test_deserialize_stack_map_frame_of_type_full_frame_premature_termination_during_offset_delta_1() {
+        assert_eof(StackMapFrame::deserialize, b"\xff");
+    }
+
+    #[test]
+    fn test_deserialize_stack_map_frame_of_type_full_frame_premature_termination_during_offset_delta_2() {
+        assert_eof(StackMapFrame::deserialize, b"\xff\x00");
+    }
+
+    #[test]
+    fn test_deserialize_stack_map_frame_of_type_full_frame_premature_termination_during_local_count_1() {
+        assert_eof(StackMapFrame::deserialize, b"\xff\x00\x00");
+    }
+
+    #[test]
+    fn test_deserialize_stack_map_frame_of_type_full_frame_premature_termination_during_local_count_2() {
+        assert_eof(StackMapFrame::deserialize, b"\xff\x00\x00\x00");
+    }
+
+    #[test]
+    fn test_deserialize_stack_map_frame_of_type_full_frame_premature_termination_before_locals() {
+        assert_eof(StackMapFrame::deserialize, b"\xff\x00\x00\x00\x01");
+    }
+
+    #[test]
+    fn test_deserialize_stack_map_frame_of_type_full_frame_premature_termination_during_local() {
+        assert_eof(StackMapFrame::deserialize, b"\xff\x00\x00\x00\x01\x08");
+    }
+
+    #[test]
+    fn test_deserialize_stack_map_frame_of_type_full_frame_premature_termination_between_locals() {
+        assert_eof(StackMapFrame::deserialize, b"\xff\x00\x00\x00\x02\x00");
+    }
+
+    #[test]
+    fn test_deserialize_stack_map_frame_of_type_full_frame_premature_termination_during_stack_item_count_1() {
+        assert_eof(StackMapFrame::deserialize, b"\xff\x00\x00\x00\x00");
+    }
+
+    #[test]
+    fn test_deserialize_stack_map_frame_of_type_full_frame_premature_termination_during_stack_item_count_2() {
+        assert_eof(StackMapFrame::deserialize, b"\xff\x00\x00\x00\x00\x00");
+    }
+
+    #[test]
+    fn test_deserialize_stack_map_frame_of_type_full_frame_premature_termination_before_stack_items() {
+        assert_eof(StackMapFrame::deserialize, b"\xff\x00\x00\x00\x00\x00\x01");
+    }
+
+    #[test]
+    fn test_deserialize_stack_map_frame_of_type_full_frame_premature_termination_during_stack_items() {
+        assert_eof(StackMapFrame::deserialize, b"\xff\x00\x00\x00\x00\x00\x01\x07");
+    }
+
+    #[test]
+    fn test_deserialize_stack_map_frame_of_type_full_frame_premature_termination_between_stack_items() {
+        assert_eof(StackMapFrame::deserialize, b"\xff\x00\x00\x00\x00\x00\x02\x02");
+    }
+
+    #[test]
+    fn test_stack_map_frame_types_128_to_246_are_invalid() {
+        for frame_type in 128..=246 {
+            let data = vec![frame_type];
+            deserialize_expecting_error(StackMapFrame::deserialize, &data, |err| match *err {
+                ClassLoaderError::InvalidStackFrameType(ref reported_frame_type) =>
+                    if frame_type != *reported_frame_type {
+                        panic!("InvalidStackFrameType error reported incorrect type; expected {}, was {}", frame_type, reported_frame_type);
+                    },
+                _ => panic!("Unexpected error; wanted InvalidStackFrameType, but got {:#?}", err),
+            });
+        }
     }
 
     fn do_float_test(float_bits: u32, input: &[u8]) {

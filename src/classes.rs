@@ -197,7 +197,7 @@ pub struct ExceptionTableRow {
 pub enum StackMapFrame {
     SameFrame {offset_delta: u8},
     SameLocalsOneStackItemFrame {offset_delta: u8, stack_item: VerificationType},
-    SameLocalsOneStackFrameExtended {offset_delta: u16, stack_item: VerificationType},
+    SameLocalsOneStackItemFrameExtended {offset_delta: u16, stack_item: VerificationType},
     ChopFrame {offset_delta: u16, num_absent_locals: u8},
     SameFrameExtended {offset_delta: u16},
     AppendFrame {offset_delta: u16, new_locals: Vec<VerificationType>},
