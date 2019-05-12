@@ -211,17 +211,11 @@ fn deserialize_code(attribute_name: ConstantIndex, constants: &Vec<Constant>, de
 
     require!(data has 2 bytes for "Code attribute exception table length");
     let exception_row_count = data.get_u16_be() as usize;
-    let mut exception_table = vec![];
-    for _ in 0..exception_row_count {
-        exception_table.push(ExceptionTableRow::deserialize(data)?);
-    }
+    let exception_table = deserialize_multiple(exception_row_count, data)?;
 
     require!(data has 2 bytes for "Code attribute subattribute count");
     let attributes_count = data.get_u16_be() as usize;
-    let mut attributes = vec![];
-    for _ in 0..attributes_count {
-        attributes.push(Attribute::deserialize(data, constants)?);
-    }
+    let attributes = deserialize_multiple_with_constants(attributes_count, data, constants)?;
 
     let actual_length = (initial_bytes_remaining - data.remaining()) as u32;
     if actual_length != declared_length {
@@ -275,7 +269,7 @@ impl Deserialize for StackMapFrame {
                 require!(data has 2 bytes for "chop frame offset");
                 Ok(StackMapFrame::ChopFrame {
                     offset_delta: data.get_u16_be(),
-                    num_absent_locals: 251 - frame_type,
+                    num_absent_locals: (251 - frame_type),
                 })
             },
             251 => {
@@ -288,11 +282,8 @@ impl Deserialize for StackMapFrame {
                 require!(data has 2 bytes for "append frame offset");
                 let offset_delta = data.get_u16_be();
 
-                let num_locals = frame_type - 251;
-                let mut locals = vec![];
-                for _ in 0..num_locals {
-                    locals.push(VerificationType::deserialize(data)?);
-                }
+                let num_locals = (frame_type - 251) as usize;
+                let locals = deserialize_multiple(num_locals, data)?;
 
                 Ok(StackMapFrame::AppendFrame {
                     offset_delta: offset_delta,
@@ -304,18 +295,12 @@ impl Deserialize for StackMapFrame {
                 let offset_delta = data.get_u16_be();
 
                 require!(data has 2 bytes for "full stack frame locals count");
-                let num_locals = data.get_u16_be();
-                let mut locals = vec![];
-                for _ in 0..num_locals {
-                    locals.push(VerificationType::deserialize(data)?);
-                }
+                let num_locals = data.get_u16_be() as usize;
+                let locals = deserialize_multiple(num_locals, data)?;
 
                 require!(data has 2 bytes for "full stack frame stack item count");
-                let num_stack_items = data.get_u16_be();
-                let mut stack_items = vec![];
-                for _ in 0..num_stack_items {
-                    stack_items.push(VerificationType::deserialize(data)?);
-                }
+                let num_stack_items = data.get_u16_be() as usize;
+                let stack_items = deserialize_multiple(num_stack_items, data)?;
 
                 Ok(StackMapFrame::FullFrame {
                     offset_delta: offset_delta,
@@ -348,6 +333,24 @@ impl Deserialize for VerificationType {
             _ => Err(ClassLoaderError::InvalidVerificationType(type_id)),
         };
     }
+}
+
+fn deserialize_multiple<D: Deserialize>(count: usize, data: &mut bytes::Buf) -> Result<Vec<D>, ClassLoaderError> {
+    let mut res = vec![];
+    for _ in 0..count {
+        res.push(D::deserialize(data)?);
+    }
+
+    return Ok(res);
+}
+
+fn deserialize_multiple_with_constants<D: DeserializeWithConstants>(count: usize, data: &mut bytes::Buf, constants: &Vec<Constant>) -> Result<Vec<D>, ClassLoaderError> {
+    let mut res = vec![];
+    for _ in 0..count {
+        res.push(D::deserialize(data, constants)?);
+    }
+
+    return Ok(res);
 }
 
 #[derive(Debug, PartialEq)]
