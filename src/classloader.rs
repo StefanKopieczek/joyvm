@@ -168,36 +168,40 @@ impl DeserializeWithConstants for Attribute {
         }?;
 
         require!(data has 4 bytes for "attribute length");
-        let length = data.get_u32_be();
+        let declared_length = data.get_u32_be();
 
-        match attribute_type.as_ref() {
-            "ConstantValue" => deserialize_constant_value(attribute_type_index, length, data),
-            "Code" => deserialize_code(attribute_type_index, constants, length, data),
-            "StackMapTable" => deserialize_stack_map_table(attribute_type_index, length, data),
-            "Exceptions" => deserialize_exceptions(attribute_type_index, length, data),
+        let bytes_remaining_before_parsing_body = data.remaining();
+        let result = match attribute_type.as_ref() {
+            "ConstantValue" => deserialize_constant_value(attribute_type_index, data),
+            "Code" => deserialize_code(attribute_type_index, constants,  data),
+            "StackMapTable" => deserialize_stack_map_table(attribute_type_index, data),
+            "Exceptions" => deserialize_exceptions(attribute_type_index, data),
             _ => Err(ClassLoaderError::UnknownAttributeType(attribute_type.to_string()))
+        };
+        let actual_length = (bytes_remaining_before_parsing_body - data.remaining()) as u32;
+
+        if declared_length == actual_length {
+            result
+        } else {
+            // Only return LengthMismatch if parsing was otherwise a success except for the
+            // length discrepancy; otherwise we return the underlying parse failure.
+            result.and(Err(ClassLoaderError::LengthMismatch {
+                context: format!("Parsing attribute of type {}", attribute_type),
+                stated_length: declared_length,
+                inferred_length: actual_length,
+            }))
         }
     }
 }
 
-fn deserialize_constant_value(attribute_name: ConstantIndex, length: u32, data: &mut bytes::Buf) -> Result<Attribute, ClassLoaderError> {
-    if length == 2 {
-        Ok(Attribute::ConstantValue {
-            attribute_name: attribute_name,
-            constant_value: ConstantIndex::deserialize(data)?,
-        })
-    } else {
-        Err(ClassLoaderError::LengthMismatch {
-            context: "ConstantValue attribute".to_string(),
-            stated_length: length,
-            inferred_length: 2
-        })
-    }
+fn deserialize_constant_value(attribute_name: ConstantIndex, data: &mut bytes::Buf) -> Result<Attribute, ClassLoaderError> {
+    Ok(Attribute::ConstantValue {
+        attribute_name: attribute_name,
+        constant_value: ConstantIndex::deserialize(data)?,
+    })
 }
 
-fn deserialize_code(attribute_name: ConstantIndex, constants: &Vec<Constant>, declared_length: u32, data: &mut bytes::Buf) -> Result<Attribute, ClassLoaderError> {
-    let initial_bytes_remaining = data.remaining();
-
+fn deserialize_code(attribute_name: ConstantIndex, constants: &Vec<Constant>, data: &mut bytes::Buf) -> Result<Attribute, ClassLoaderError> {
     require!(data has 2 bytes for "Code attribute max stack size");
     let max_stack = data.get_u16_be();
 
@@ -221,15 +225,6 @@ fn deserialize_code(attribute_name: ConstantIndex, constants: &Vec<Constant>, de
     let attributes_count = data.get_u16_be() as usize;
     let attributes = deserialize_multiple_with_constants(attributes_count, data, constants)?;
 
-    let actual_length = (initial_bytes_remaining - data.remaining()) as u32;
-    if actual_length != declared_length {
-        return Err(ClassLoaderError::LengthMismatch {
-            context: "Code attribute".to_string(),
-            stated_length: declared_length,
-            inferred_length: actual_length,
-        });
-    }
-
     Ok(Attribute::Code {
         attribute_name: attribute_name,
         max_stack: max_stack,
@@ -240,48 +235,26 @@ fn deserialize_code(attribute_name: ConstantIndex, constants: &Vec<Constant>, de
     })
 }
 
-fn deserialize_stack_map_table(attribute_name: ConstantIndex, declared_length: u32, data: &mut bytes::Buf) -> Result<Attribute, ClassLoaderError> {
-    let initial_bytes_remaining = data.remaining();
-
+fn deserialize_stack_map_table(attribute_name: ConstantIndex, data: &mut bytes::Buf) -> Result<Attribute, ClassLoaderError> {
     require!(data has 2 bytes for "stack map table entry count");
     let num_entries = data.get_u16_be() as usize;
     let entries = deserialize_multiple(num_entries, data)?;
 
-    let actual_length = (initial_bytes_remaining - data.remaining()) as u32;
-    if actual_length != declared_length {
-        return Err(ClassLoaderError::LengthMismatch {
-            context: "StackMapTable attribute".to_string(),
-            stated_length: declared_length,
-            inferred_length: actual_length,
-        });
-    }
-
-    return Ok(Attribute::StackMapTable {
+    Ok(Attribute::StackMapTable {
         attribute_name: attribute_name,
         entries: entries,
-    });
+    })
 }
 
-fn deserialize_exceptions(attribute_name: ConstantIndex, declared_length: u32, data: &mut bytes::Buf) -> Result<Attribute, ClassLoaderError> {
-    let initial_bytes_remaining = data.remaining();
-
+fn deserialize_exceptions(attribute_name: ConstantIndex, data: &mut bytes::Buf) -> Result<Attribute, ClassLoaderError> {
     require!(data has 2 bytes for "exception attribute table size");
     let num_exceptions = data.get_u16_be() as usize;
     let exception_indices = deserialize_multiple(num_exceptions, data)?;
 
-    let actual_length  = (initial_bytes_remaining - data.remaining()) as u32;
-    if actual_length != declared_length {
-        return Err(ClassLoaderError::LengthMismatch {
-            context: "Exceptions attribute".to_string(),
-            stated_length: declared_length,
-            inferred_length: actual_length,
-        });
-    }
-
-    return Ok(Attribute::Exceptions {
+    Ok(Attribute::Exceptions {
         attribute_name: attribute_name,
         index_table: exception_indices,
-    });
+    })
 }
 
 impl Deserialize for ExceptionTableRow {
