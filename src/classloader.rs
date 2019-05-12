@@ -90,35 +90,35 @@ fn deserialize_double(data: &mut bytes::Buf) -> Result<Constant, ClassLoaderErro
 }
 
 fn deserialize_classref(data: &mut bytes::Buf) -> Result<Constant, ClassLoaderError> {
-    deserialize_constant_index(data).map(Constant::ClassRef)
+    ConstantIndex::deserialize(data).map(Constant::ClassRef)
 }
 
 fn deserialize_string(data: &mut bytes::Buf) -> Result<Constant, ClassLoaderError> {
-    deserialize_constant_index(data).map(Constant::StringRef)
+    ConstantIndex::deserialize(data).map(Constant::StringRef)
 }
 
 fn deserialize_fieldref(data: &mut bytes::Buf) -> Result<Constant, ClassLoaderError> {
-    let class = deserialize_constant_index(data)?;
-    let name_and_type = deserialize_constant_index(data)?;
+    let class = ConstantIndex::deserialize(data)?;
+    let name_and_type = ConstantIndex::deserialize(data)?;
     Ok(Constant::FieldRef {class: class, name_and_type: name_and_type})
 }
 
 fn deserialize_methodref(data: &mut bytes::Buf) -> Result<Constant, ClassLoaderError> {
-    let class = deserialize_constant_index(data)?;
-    let name_and_type = deserialize_constant_index(data)?;
+    let class = ConstantIndex::deserialize(data)?;
+    let name_and_type = ConstantIndex::deserialize(data)?;
     Ok(Constant::MethodRef {class: class, name_and_type: name_and_type})
 }
 
 fn deserialize_interface_method_ref(data: &mut bytes::Buf) -> Result<Constant, ClassLoaderError> {
-    let class = deserialize_constant_index(data)?;
-    let name_and_type = deserialize_constant_index(data)?;
+    let class = ConstantIndex::deserialize(data)?;
+    let name_and_type = ConstantIndex::deserialize(data)?;
     Ok(Constant::InterfaceMethodRef {class: class, name_and_type: name_and_type})
 }
 
 fn deserialize_method_handle_ref(data: &mut bytes::Buf) -> Result<Constant, ClassLoaderError> {
     require!(data has 1 byte for "method handle ref kind");
     let kind = data.get_u8();
-    let index = deserialize_constant_index(data)?;
+    let index = ConstantIndex::deserialize(data)?;
     let handle = match kind {
         1 => Ok(MethodHandle::GetField(index)),
         2 => Ok(MethodHandle::GetStatic(index)),
@@ -136,19 +136,14 @@ fn deserialize_method_handle_ref(data: &mut bytes::Buf) -> Result<Constant, Clas
 }
 
 fn deserialize_method_type(data: &mut bytes::Buf) -> Result<Constant, ClassLoaderError> {
-    Ok(Constant::MethodType(deserialize_constant_index(data)?))
+    Ok(Constant::MethodType(ConstantIndex::deserialize(data)?))
 }
 
 fn deserialize_invoke_dynamic_info(data: &mut bytes::Buf) -> Result<Constant, ClassLoaderError> {
     Ok(Constant::InvokeDynamicInfo{
         bootstrap_method_attr: deserialize_method_index(data)?,
-        name_and_type: deserialize_constant_index(data)?,
+        name_and_type: ConstantIndex::deserialize(data)?,
     })
-}
-
-fn deserialize_constant_index(data: &mut bytes::Buf) -> Result<ConstantIndex, ClassLoaderError> {
-    require!(data has 2 bytes for "constant index");
-    Ok(ConstantIndex(data.get_u16_be()))
 }
 
 fn deserialize_method_index(data: &mut bytes::Buf) -> Result<MethodIndex, ClassLoaderError> {
@@ -156,9 +151,16 @@ fn deserialize_method_index(data: &mut bytes::Buf) -> Result<MethodIndex, ClassL
     Ok(MethodIndex(data.get_u16_be()))
 }
 
+impl Deserialize for ConstantIndex {
+    fn deserialize(data: &mut bytes::Buf) -> Result<ConstantIndex, ClassLoaderError> {
+        require!(data has 2 bytes for "constant index");
+        Ok(ConstantIndex(data.get_u16_be()))
+    }
+}
+
 impl DeserializeWithConstants for Attribute {
     fn deserialize(data: &mut bytes::Buf, constants: &Vec<Constant>) -> Result<Attribute, ClassLoaderError> {
-        let attribute_type_index = deserialize_constant_index(data)?;
+        let attribute_type_index = ConstantIndex::deserialize(data)?;
         let attribute_type_ref = attribute_type_index.lookup(constants)?;
         let attribute_type = match *attribute_type_ref {
             Constant::Utf8(ref attr_type) => Ok(attr_type),
@@ -172,6 +174,7 @@ impl DeserializeWithConstants for Attribute {
             "ConstantValue" => deserialize_constant_value(attribute_type_index, length, data),
             "Code" => deserialize_code(attribute_type_index, constants, length, data),
             "StackMapTable" => deserialize_stack_map_table(attribute_type_index, length, data),
+            "Exceptions" => deserialize_exceptions(attribute_type_index, length, data),
             _ => Err(ClassLoaderError::UnknownAttributeType(attribute_type.to_string()))
         }
     }
@@ -181,7 +184,7 @@ fn deserialize_constant_value(attribute_name: ConstantIndex, length: u32, data: 
     if length == 2 {
         Ok(Attribute::ConstantValue {
             attribute_name: attribute_name,
-            constant_value: deserialize_constant_index(data)?,
+            constant_value: ConstantIndex::deserialize(data)?,
         })
     } else {
         Err(ClassLoaderError::LengthMismatch {
@@ -259,6 +262,28 @@ fn deserialize_stack_map_table(attribute_name: ConstantIndex, declared_length: u
     });
 }
 
+fn deserialize_exceptions(attribute_name: ConstantIndex, declared_length: u32, data: &mut bytes::Buf) -> Result<Attribute, ClassLoaderError> {
+    let initial_bytes_remaining = data.remaining();
+
+    require!(data has 2 bytes for "exception attribute table size");
+    let num_exceptions = data.get_u16_be() as usize;
+    let exception_indices = deserialize_multiple(num_exceptions, data)?;
+
+    let actual_length  = (initial_bytes_remaining - data.remaining()) as u32;
+    if actual_length != declared_length {
+        return Err(ClassLoaderError::LengthMismatch {
+            context: "Exceptions attribute".to_string(),
+            stated_length: declared_length,
+            inferred_length: actual_length,
+        });
+    }
+
+    return Ok(Attribute::Exceptions {
+        attribute_name: attribute_name,
+        index_table: exception_indices,
+    });
+}
+
 impl Deserialize for ExceptionTableRow {
     fn deserialize(data: &mut bytes::Buf) -> Result<ExceptionTableRow, ClassLoaderError> {
         require!(data has 8 bytes for "exception table row");
@@ -266,7 +291,7 @@ impl Deserialize for ExceptionTableRow {
             start_pc: data.get_u16_be(),
             end_pc: data.get_u16_be(),
             handler_pc: data.get_u16_be(),
-            catch_type: deserialize_constant_index(data)?,
+            catch_type: ConstantIndex::deserialize(data)?,
         })
     }
 }
@@ -348,7 +373,7 @@ impl Deserialize for VerificationType {
             4 => Ok(VerificationType::Long),
             5 => Ok(VerificationType::Null),
             6 => Ok(VerificationType::UninitializedThis),
-            7 => Ok(VerificationType::Object(deserialize_constant_index(data)?)),
+            7 => Ok(VerificationType::Object(ConstantIndex::deserialize(data)?)),
             8 => {
                 require!(data has 2 bytes for "uninitialized variable offset");
                 Ok(VerificationType::Uninitialized(data.get_u16_be()))
@@ -454,6 +479,16 @@ impl error::Error for ClassLoaderError {
 mod tests {
     use super::*;
     use fmt::Debug;
+
+    macro_rules! expect {
+        ($exception:pat in $code:expr) => {{
+            let var = $code.expect_err(&format!("Expected {} but got a result", stringify!($exception)));
+            match var {
+                $exception => (),
+                _ => panic!("Expected {}; got {:#?}", stringify!($exception), var),
+            }
+        }};
+    }
 
     #[test]
     fn test_deserialize_utf8() {
@@ -1322,7 +1357,7 @@ mod tests {
     #[test]
     fn test_deserialize_constant_attribute_at_0x0001_and_0x0002() {
         let bytes = b"\x00\x01\x00\x00\x00\x02\x00\x02";
-        let constants = vec![Constant::Utf8("ConstantValue".to_string())];
+        let constants = utf8_constant_pool(vec!["ConstantValue"]);
         let expected = Attribute::ConstantValue {
             attribute_name: ConstantIndex(0x0001),
             constant_value: ConstantIndex(0x0002),
@@ -1521,7 +1556,7 @@ mod tests {
         };
 
         let bytes = b"\x00\x01\x00\x00\x00\x0c\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00";
-        let constants = vec![Constant::Utf8("Code".to_string())];
+        let constants = utf8_constant_pool(vec!["Code"]);
 
         assert_deserialize_with_constants(expected, bytes, &constants);
     }
@@ -1538,7 +1573,7 @@ mod tests {
         };
 
         let bytes = b"\x00\x02\x00\x00\x00\x0c\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00";
-        let constants = vec![Constant::Utf8("Constant".to_string()), Constant::Utf8("Code".to_string())];
+        let constants = utf8_constant_pool(vec!["Constant", "Code"]);
 
         assert_deserialize_with_constants(expected, bytes, &constants);
     }
@@ -1555,7 +1590,7 @@ mod tests {
         };
 
         let bytes = b"\x00\x01\x00\x00\x00\x0c\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00";
-        let constants = vec![Constant::Utf8("Code".to_string())];
+        let constants = utf8_constant_pool(vec!["Code"]);
 
         assert_deserialize_with_constants(expected, bytes, &constants);
     }
@@ -1572,7 +1607,7 @@ mod tests {
         };
 
         let bytes = b"\x00\x01\x00\x00\x00\x0c\xff\xff\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00";
-        let constants = vec![Constant::Utf8("Code".to_string())];
+        let constants = utf8_constant_pool(vec!["Code"]);
 
         assert_deserialize_with_constants(expected, bytes, &constants);
     }
@@ -1589,7 +1624,7 @@ mod tests {
         };
 
         let bytes = b"\x00\x01\x00\x00\x00\x0c\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00";
-        let constants = vec![Constant::Utf8("Code".to_string())];
+        let constants = utf8_constant_pool(vec!["Code"]);
 
         assert_deserialize_with_constants(expected, bytes, &constants);
     }
@@ -1606,7 +1641,7 @@ mod tests {
         };
 
         let bytes = b"\x00\x01\x00\x00\x00\x0c\x00\x00\xff\xff\x00\x00\x00\x00\x00\x00\x00\x00";
-        let constants = vec![Constant::Utf8("Code".to_string())];
+        let constants = utf8_constant_pool(vec!["Code"]);
 
         assert_deserialize_with_constants(expected, bytes, &constants);
     }
@@ -1623,7 +1658,7 @@ mod tests {
         };
 
         let bytes = b"\x00\x01\x00\x00\x00\x0d\x00\x00\x00\x00\x00\x00\x00\x01\xcd\x00\x00\x00\x00";
-        let constants = vec![Constant::Utf8("Code".to_string())];
+        let constants = utf8_constant_pool(vec!["Code"]);
 
         assert_deserialize_with_constants(expected, bytes, &constants);
     }
@@ -1640,7 +1675,7 @@ mod tests {
         };
 
         let bytes = b"\x00\x01\x00\x00\x00\x16\x00\x00\x00\x00\x00\x00\x00\x0a\x11\x22\x33\x44\x55\x66\x77\x88\x99\xaa\x00\x00\x00\x00";
-        let constants = vec![Constant::Utf8("Code".to_string())];
+        let constants = utf8_constant_pool(vec!["Code"]);
 
         assert_deserialize_with_constants(expected, bytes, &constants);
     }
@@ -1669,7 +1704,7 @@ mod tests {
         bytes.append(&mut b"\x00\x01\x01\xff\xff\xff\x00\x00\x00\x00\x01\xff\xff\xf3".to_vec());
         bytes.append(&mut code);
         bytes.append(&mut b"\x00\x00\x00\x00".to_vec());
-        let constants = vec![Constant::Utf8("Code".to_string())];
+        let constants = utf8_constant_pool(vec!["Code"]);
 
         assert_deserialize_with_constants(expected, &bytes, &constants);
     }
@@ -1688,7 +1723,7 @@ mod tests {
         };
 
         let bytes = b"\x00\x01\x00\x00\x00\x14\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00";
-        let constants = vec![Constant::Utf8("Code".to_string())];
+        let constants = utf8_constant_pool(vec!["Code"]);
 
         assert_deserialize_with_constants(expected, bytes, &constants);
     }
@@ -1707,7 +1742,7 @@ mod tests {
         };
 
         let bytes = b"\x00\x01\x00\x00\x00\x14\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01\xab\xcd\xcd\xef\xef\x12\x12\x34\x00\x00";
-        let constants = vec![Constant::Utf8("Code".to_string())];
+        let constants = utf8_constant_pool(vec!["Code"]);
 
         assert_deserialize_with_constants(expected, bytes, &constants);
     }
@@ -1749,7 +1784,7 @@ mod tests {
         bytes.push(0x00);
         bytes.push(0x00);
 
-        let constants = vec![Constant::Utf8("Code".to_string())];
+        let constants = utf8_constant_pool(vec!["Code"]);
         assert_deserialize_with_constants(expected, &bytes, &constants);
     }
 
@@ -1765,7 +1800,7 @@ mod tests {
         };
 
         let bytes = b"\x00\x01\x00\x00\x00\x14\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01\x00\x02\x00\x00\x00\x02\x00\x00";
-        let constants = vec![Constant::Utf8("Code".to_string()), Constant::Utf8("ConstantValue".to_string())];
+        let constants = utf8_constant_pool(vec!["Code", "ConstantValue"]);
 
         assert_deserialize_with_constants(expected, bytes, &constants);
     }
@@ -1797,8 +1832,7 @@ mod tests {
             bytes.push(value_index as u8);
         }
 
-        let constants = vec![Constant::Utf8("Code".to_string()), Constant::Utf8("ConstantValue".to_string())];
-
+        let constants = utf8_constant_pool(vec!["Code", "ConstantValue"]);
         assert_deserialize_with_constants(expected, &bytes, &constants);
     }
 
@@ -2588,7 +2622,7 @@ mod tests {
             entries: vec![],
         };
 
-        let constants = vec![Constant::Utf8("StackMapTable".to_string())];
+        let constants = utf8_constant_pool(vec!["StackMapTable"]);
         let bytes = b"\x00\x01\x00\x00\x00\x02\x00\x00";
 
         assert_deserialize_with_constants(expected, bytes, &constants);
@@ -2601,7 +2635,7 @@ mod tests {
             entries: vec![],
         };
 
-        let constants = vec![Constant::Integer(1), Constant::Integer(2), Constant::Utf8("StackMapTable".to_string())];
+        let constants = utf8_constant_pool(vec!["Code", "Banana", "StackMapTable", "ConstantValue"]);
         let bytes = b"\x00\x03\x00\x00\x00\x02\x00\x00";
 
         assert_deserialize_with_constants(expected, bytes, &constants);
@@ -2616,7 +2650,7 @@ mod tests {
             }],
         };
 
-        let constants = vec![Constant::Utf8("StackMapTable".to_string())];
+        let constants = utf8_constant_pool(vec!["StackMapTable"]);
         let bytes = b"\x00\x01\x00\x00\x00\x03\x00\x01\x3f";
 
         assert_deserialize_with_constants(expected, bytes, &constants);
@@ -2633,7 +2667,7 @@ mod tests {
             }],
         };
 
-        let constants = vec![Constant::Utf8("StackMapTable".to_string())];
+        let constants = utf8_constant_pool(vec!["StackMapTable"]);
         let bytes = b"\x00\x01\x00\x00\x00\x0c\x00\x01\xff\x00\x72\x00\x02\x01\x00\x00\x01\x05";
 
         assert_deserialize_with_constants(expected, bytes, &constants);
@@ -2660,7 +2694,7 @@ mod tests {
             ],
         };
 
-        let constants = vec![Constant::Utf8("StackMapTable".to_string())];
+        let constants = utf8_constant_pool(vec!["StackMapTable"]);
         let bytes = b"\x00\x01\x00\x00\x00\x12\x00\x03\xff\x00\x40\x00\x02\x01\x02\x00\x00\xfa\x00\x50\xfc\x00\x5f\x05";
 
         assert_deserialize_with_constants(expected, bytes, &constants);
@@ -2668,61 +2702,61 @@ mod tests {
 
     #[test]
     fn test_deserialize_stack_map_table_premature_termination_during_attribute_length_1() {
-        let constants = vec![Constant::Utf8("StackMapTable".to_string())];
+        let constants = utf8_constant_pool(vec!["StackMapTable"]);
         assert_eof_with_constants(Attribute::deserialize, b"\x00\x01", &constants);
     }
 
     #[test]
     fn test_deserialize_stack_map_table_premature_termination_during_attribute_length_2() {
-        let constants = vec![Constant::Utf8("StackMapTable".to_string())];
+        let constants = utf8_constant_pool(vec!["StackMapTable"]);
         assert_eof_with_constants(Attribute::deserialize, b"\x00\x01\x00", &constants);
     }
 
     #[test]
     fn test_deserialize_stack_map_table_premature_termination_during_attribute_length_3() {
-        let constants = vec![Constant::Utf8("StackMapTable".to_string())];
+        let constants = utf8_constant_pool(vec!["StackMapTable"]);
         assert_eof_with_constants(Attribute::deserialize, b"\x00\x01\x00\x00", &constants);
     }
 
     #[test]
     fn test_deserialize_stack_map_table_premature_termination_during_attribute_length_4() {
-        let constants = vec![Constant::Utf8("StackMapTable".to_string())];
+        let constants = utf8_constant_pool(vec!["StackMapTable"]);
         assert_eof_with_constants(Attribute::deserialize, b"\x00\x01\x00\x00\x00", &constants);
     }
 
     #[test]
     fn test_deserialize_stack_map_table_premature_termination_during_entry_count_1() {
-        let constants = vec![Constant::Utf8("StackMapTable".to_string())];
+        let constants = utf8_constant_pool(vec!["StackMapTable"]);
         assert_eof_with_constants(Attribute::deserialize, b"\x00\x01\x00\x00\x00\x00", &constants);
     }
 
     #[test]
     fn test_deserialize_stack_map_table_premature_termination_during_entry_count_2() {
-        let constants = vec![Constant::Utf8("StackMapTable".to_string())];
+        let constants = utf8_constant_pool(vec!["StackMapTable"]);
         assert_eof_with_constants(Attribute::deserialize, b"\x00\x01\x00\x00\x00\x01\x00", &constants);
     }
 
     #[test]
     fn test_deserialize_stack_map_table_premature_termination_before_entries() {
-        let constants = vec![Constant::Utf8("StackMapTable".to_string())];
+        let constants = utf8_constant_pool(vec!["StackMapTable"]);
         assert_eof_with_constants(Attribute::deserialize, b"\x00\x01\x00\x00\x00\x02\x00\x01", &constants);
     }
 
     #[test]
     fn test_deserialize_stack_map_table_premature_termination_during_entry() {
-        let constants = vec![Constant::Utf8("StackMapTable".to_string())];
+        let constants = utf8_constant_pool(vec!["StackMapTable"]);
         assert_eof_with_constants(Attribute::deserialize, b"\x00\x01\x00\x00\x00\x03\x00\x01\xff", &constants);
     }
 
     #[test]
     fn test_deserialize_stack_map_table_premature_termination_between_entries() {
-        let constants = vec![Constant::Utf8("StackMapTable".to_string())];
+        let constants = utf8_constant_pool(vec!["StackMapTable"]);
         assert_eof_with_constants(Attribute::deserialize, b"\x00\x01\x00\x00\x00\x03\x00\x02\x00", &constants);
     }
 
     #[test]
     fn test_deserialize_stack_map_table_errors_if_declared_length_is_zero() {
-        let constants = vec![Constant::Utf8("StackMapTable".to_string())];
+        let constants = utf8_constant_pool(vec!["StackMapTable"]);
         deserialize_with_constants_expecting_error(
             Attribute::deserialize,
             b"\x00\x01\x00\x00\x00\x00\x00\x00",
@@ -2735,7 +2769,7 @@ mod tests {
 
     #[test]
     fn test_deserialize_stack_map_table_errors_if_declared_length_is_one() {
-        let constants = vec![Constant::Utf8("StackMapTable".to_string())];
+        let constants = utf8_constant_pool(vec!["StackMapTable"]);
         deserialize_with_constants_expecting_error(
             Attribute::deserialize,
             b"\x00\x01\x00\x00\x00\x01\x00\x00",
@@ -2748,7 +2782,7 @@ mod tests {
 
     #[test]
     fn test_deserialize_stack_map_table_errors_if_declared_length_is_shorter_than_one_byte_table() {
-        let constants = vec![Constant::Utf8("StackMapTable".to_string())];
+        let constants = utf8_constant_pool(vec!["StackMapTable"]);
         deserialize_with_constants_expecting_error(
             Attribute::deserialize,
             b"\x00\x01\x00\x00\x00\x02\x00\x01\x01",
@@ -2761,7 +2795,7 @@ mod tests {
 
     #[test]
     fn test_deserialize_stack_map_table_errors_if_declared_length_is_longer_than_one_byte_table() {
-        let constants = vec![Constant::Utf8("StackMapTable".to_string())];
+        let constants = utf8_constant_pool(vec!["StackMapTable"]);
         deserialize_with_constants_expecting_error(
             Attribute::deserialize,
             b"\x00\x01\x00\x00\x00\x04\x00\x01\x01",
@@ -2774,7 +2808,7 @@ mod tests {
 
     #[test]
     fn test_deserialize_stack_map_table_errors_if_declared_length_is_shorter_than_long_single_entry_table() {
-        let constants = vec![Constant::Utf8("StackMapTable".to_string())];
+        let constants = utf8_constant_pool(vec!["StackMapTable"]);
         deserialize_with_constants_expecting_error(
             Attribute::deserialize,
             b"\x00\x01\x00\x00\x00\x0d\x00\x01\xff\xab\xcd\x00\x02\x00\x05\x00\x03\x01\x00\x02",
@@ -2787,7 +2821,7 @@ mod tests {
 
     #[test]
     fn test_deserialize_stack_map_table_errors_if_declared_length_is_longer_than_long_single_entry_table() {
-        let constants = vec![Constant::Utf8("StackMapTable".to_string())];
+        let constants = utf8_constant_pool(vec!["StackMapTable"]);
         deserialize_with_constants_expecting_error(
             Attribute::deserialize,
             b"\x00\x01\x00\x00\x00\x0f\x00\x01\xff\xab\xcd\x00\x02\x00\x05\x00\x03\x01\x00\x02",
@@ -2800,20 +2834,17 @@ mod tests {
 
     #[test]
     fn test_deserialize_stack_map_table_errors_if_declared_length_is_shorter_than_multi_entry_table() {
-        let constants = vec![Constant::Utf8("StackMapTable".to_string())];
-        deserialize_with_constants_expecting_error(
+        let constants = utf8_constant_pool(vec!["StackMapTable"]);
+        expect!(ClassLoaderError::LengthMismatch{..} in deserialize_with_constants(
             Attribute::deserialize,
             b"\x00\x01\x00\x00\x00\x0f\x00\x03\x02\xff\xab\xcd\x00\x03\x01\x00\x02\x00\x02\x00\x05\x3e",
-            &constants,
-            |err| match *err {
-                ClassLoaderError::LengthMismatch{..} => (),
-                _ => panic!("Unexpected error; expected LengthMismatch; got {:#?}", err),
-            });
+            &constants
+        ));
     }
 
     #[test]
     fn test_deserialize_stack_map_table_errors_if_declared_length_is_longer_than_multi_entry_table() {
-        let constants = vec![Constant::Utf8("StackMapTable".to_string())];
+        let constants = utf8_constant_pool(vec!["StackMapTable"]);
         deserialize_with_constants_expecting_error(
             Attribute::deserialize,
             b"\x00\x01\x00\x00\x00\x11\x00\x03\x02\xff\xab\xcd\x00\x03\x01\x00\x02\x00\x02\x00\x05\x3e",
@@ -2824,6 +2855,144 @@ mod tests {
             });
     }
 
+    #[test]
+    fn test_deserialize_empty_exceptions_attribute() {
+        let expected = Attribute::Exceptions {
+            attribute_name: ConstantIndex(1),
+            index_table: vec![],
+        };
+
+        let constants = utf8_constant_pool(vec!["Exceptions"]);
+        let bytes = b"\x00\x01\x00\x00\x00\x02\x00\x00";
+
+        assert_deserialize_with_constants(expected, bytes, &constants);
+    }
+
+    #[test]
+    fn test_deserialize_exceptions_attribute_with_different_constant_index() {
+        let expected = Attribute::Exceptions {
+            attribute_name: ConstantIndex(2),
+            index_table: vec![],
+        };
+
+        let constants = utf8_constant_pool(vec!["Code", "Exceptions", "Crumpets"]);
+        let bytes = b"\x00\x02\x00\x00\x00\x02\x00\x00";
+
+        assert_deserialize_with_constants(expected, bytes, &constants);
+    }
+
+    #[test]
+    fn test_deserialize_exceptions_attribute_with_single_exception() {
+        let expected = Attribute::Exceptions {
+            attribute_name: ConstantIndex(1),
+            index_table: vec![ConstantIndex(0x1234)],
+        };
+
+        let constants = utf8_constant_pool(vec!["Exceptions"]);
+        let bytes = b"\x00\x01\x00\x00\x00\x04\x00\x01\x12\x34";
+
+        assert_deserialize_with_constants(expected, bytes, &constants);
+    }
+
+    #[test]
+    fn test_deserialize_exceptions_attribute_with_single_exception_2() {
+        let expected = Attribute::Exceptions {
+            attribute_name: ConstantIndex(1),
+            index_table: vec![ConstantIndex(0xcafe)],
+        };
+
+        let constants = utf8_constant_pool(vec!["Exceptions"]);
+        let bytes = b"\x00\x01\x00\x00\x00\x04\x00\x01\xca\xfe";
+
+        assert_deserialize_with_constants(expected, bytes, &constants);
+    }
+
+    #[test]
+    fn test_deserialize_exceptions_attribute_with_several_exceptions() {
+        let expected = Attribute::Exceptions {
+            attribute_name: ConstantIndex(1),
+            index_table: vec![ConstantIndex(0xcafe), ConstantIndex(0xbabe), ConstantIndex(0xf00d)],
+        };
+
+        let constants = utf8_constant_pool(vec!["Exceptions"]);
+        let bytes = b"\x00\x01\x00\x00\x00\x08\x00\x03\xca\xfe\xba\xbe\xf0\x0d";
+
+        assert_deserialize_with_constants(expected, bytes, &constants);
+    }
+
+    #[test]
+    fn test_deserialize_exceptions_attribute_premature_termination_during_exception_count_1() {
+        assert_eof_with_constants(Attribute::deserialize, b"\x00\x01\x00\x00\x00\x00", &utf8_constant_pool(vec!["Exceptions"]));
+    }
+
+    #[test]
+    fn test_deserialize_exceptions_attribute_premature_termination_during_exception_count_2() {
+        assert_eof_with_constants(Attribute::deserialize, b"\x00\x01\x00\x00\x00\x01\x00", &utf8_constant_pool(vec!["Exceptions"]));
+    }
+
+    #[test]
+    fn test_deserialize_exceptions_attribute_premature_termination_during_exception_index() {
+        assert_eof_with_constants(Attribute::deserialize, b"\x00\x01\x00\x00\x00\x03\x00\x01\x00", &utf8_constant_pool(vec!["Exceptions"]));
+    }
+
+    #[test]
+    fn test_deserialize_exceptions_attribute_premature_termination_between_entries() {
+        assert_eof_with_constants(Attribute::deserialize, b"\x00\x01\x00\x00\x00\x04\x00\x02\x00\x00", &utf8_constant_pool(vec!["Exceptions"]));
+    }
+
+    #[test]
+    fn test_deserialize_exceptions_attribute_errors_if_declared_length_is_zero() {
+        expect!(ClassLoaderError::LengthMismatch{..} in deserialize_with_constants(
+                Attribute::deserialize,
+                b"\x00\x01\x00\x00\x00\x00\x00\x00",
+                &utf8_constant_pool(vec!["Exceptions"])
+        ));
+    }
+
+    #[test]
+    fn test_deserialize_exceptions_attribute_errors_if_declared_length_is_one() {
+        expect!(ClassLoaderError::LengthMismatch{..} in deserialize_with_constants(
+                Attribute::deserialize,
+                b"\x00\x01\x00\x00\x00\x01\x00\x00",
+                &utf8_constant_pool(vec!["Exceptions"])
+        ));
+    }
+
+    #[test]
+    fn test_deserialize_exceptions_attribute_errors_if_declared_length_is_smaller_than_singleton_table() {
+        expect!(ClassLoaderError::LengthMismatch{..} in deserialize_with_constants(
+                Attribute::deserialize,
+                b"\x00\x01\x00\x00\x00\x03\x00\x01\x00\x01",
+                &utf8_constant_pool(vec!["Exceptions"])
+        ));
+    }
+
+    #[test]
+    fn test_deserialize_exceptions_attribute_errors_if_declared_length_is_larger_than_singleton_table() {
+        expect!(ClassLoaderError::LengthMismatch{..} in deserialize_with_constants(
+                Attribute::deserialize,
+                b"\x00\x01\x00\x00\x00\x05\x00\x01\x00\x01",
+                &utf8_constant_pool(vec!["Exceptions"])
+        ));
+    }
+
+    #[test]
+    fn test_deserialize_exceptions_attribute_errors_if_declared_length_is_smaller_than_three_row_table() {
+        expect!(ClassLoaderError::LengthMismatch{..} in deserialize_with_constants(
+                Attribute::deserialize,
+                b"\x00\x01\x00\x00\x00\x07\x00\x03\x00\x01\x02\xab\xff\xff",
+                &utf8_constant_pool(vec!["Exceptions"])
+        ));
+    }
+
+    #[test]
+    fn test_deserialize_exceptions_attribute_errors_if_declared_length_is_larger_than_three_row_table() {
+        expect!(ClassLoaderError::LengthMismatch{..} in deserialize_with_constants(
+                Attribute::deserialize,
+                b"\x00\x01\x00\x00\x00\x09\x00\x03\x00\x01\x02\xab\xff\xff",
+                &utf8_constant_pool(vec!["Exceptions"])
+        ));
+    }
     fn do_float_test(float_bits: u32, input: &[u8]) {
         assert_deserialize(Constant::Float(f32::from_bits(float_bits)), input);
     }
@@ -2892,5 +3061,21 @@ mod tests {
                 Ok(ref res) => panic!("Expected error, but got result {:#?}", res),
                 Err(ref err) => handler(&err),
             }
+    }
+
+    fn utf8_constant_pool(strings: Vec<&str>) -> Vec<Constant> {
+        return strings.iter().map(|s| Constant::Utf8(s.to_string())).collect();
+    }
+
+    fn deserialize<D: Deserialize, F>(deserializer: F, input: &[u8]) -> Result<D, ClassLoaderError> where
+        F: Fn(&mut bytes::Buf) -> Result<D, ClassLoaderError>
+    {
+        return deserializer(&mut bytes::Bytes::from(input).into_buf());
+    }
+
+    fn deserialize_with_constants<D: DeserializeWithConstants, F>(deserializer: F, input: &[u8], constants: &Vec<Constant>) -> Result<D, ClassLoaderError> where
+        F: Fn(&mut bytes::Buf, &Vec<Constant>) -> Result<D, ClassLoaderError>
+    {
+        return deserializer(&mut bytes::Bytes::from(input).into_buf(), constants);
     }
 }
