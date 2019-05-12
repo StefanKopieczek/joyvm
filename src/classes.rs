@@ -350,7 +350,7 @@ impl error::Error for ConstantLookupError {
     }
 
     fn cause(&self) -> Option<&error::Error> {
-        return None;
+        None
     }
 }
 

@@ -64,55 +64,55 @@ fn deserialize_utf8(data: &mut bytes::Buf) -> Result<Constant, ClassLoaderError>
     let mut contents = vec![0; length as usize];
     data.copy_to_slice(&mut contents);
 
-    return str::from_utf8(&contents)
+    str::from_utf8(&contents)
         .map(|slice| Constant::Utf8(slice.to_string()))
-        .map_err(|err| ClassLoaderError::Utf8(err));
+        .map_err(|err| ClassLoaderError::Utf8(err))
 }
 
 fn deserialize_integer(data: &mut bytes::Buf) -> Result<Constant, ClassLoaderError> {
     require!(data has 4 bytes for "Integer constant");
-    return Ok(Constant::Integer(data.get_u32_be()));
+    Ok(Constant::Integer(data.get_u32_be()))
 }
 
 fn deserialize_float(data: &mut bytes::Buf) -> Result<Constant, ClassLoaderError> {
     require!(data has 4 bytes for "Float constant");
-    return Ok(Constant::Float(data.get_f32_be()));
+    Ok(Constant::Float(data.get_f32_be()))
 }
 
 fn deserialize_long(data: &mut bytes::Buf) -> Result<Constant, ClassLoaderError> {
     require!(data has 8 bytes for "Long constant");
-    return Ok(Constant::Long(data.get_u64_be()));
+    Ok(Constant::Long(data.get_u64_be()))
 }
 
 fn deserialize_double(data: &mut bytes::Buf) -> Result<Constant, ClassLoaderError> {
     require!(data has 8 bytes for "Double constant");
-    return Ok(Constant::Double(data.get_f64_be()));
+    Ok(Constant::Double(data.get_f64_be()))
 }
 
 fn deserialize_classref(data: &mut bytes::Buf) -> Result<Constant, ClassLoaderError> {
-    return deserialize_constant_index(data).map(Constant::ClassRef);
+    deserialize_constant_index(data).map(Constant::ClassRef)
 }
 
 fn deserialize_string(data: &mut bytes::Buf) -> Result<Constant, ClassLoaderError> {
-    return deserialize_constant_index(data).map(Constant::StringRef);
+    deserialize_constant_index(data).map(Constant::StringRef)
 }
 
 fn deserialize_fieldref(data: &mut bytes::Buf) -> Result<Constant, ClassLoaderError> {
     let class = deserialize_constant_index(data)?;
     let name_and_type = deserialize_constant_index(data)?;
-    return Ok(Constant::FieldRef {class: class, name_and_type: name_and_type});
+    Ok(Constant::FieldRef {class: class, name_and_type: name_and_type})
 }
 
 fn deserialize_methodref(data: &mut bytes::Buf) -> Result<Constant, ClassLoaderError> {
     let class = deserialize_constant_index(data)?;
     let name_and_type = deserialize_constant_index(data)?;
-    return Ok(Constant::MethodRef {class: class, name_and_type: name_and_type});
+    Ok(Constant::MethodRef {class: class, name_and_type: name_and_type})
 }
 
 fn deserialize_interface_method_ref(data: &mut bytes::Buf) -> Result<Constant, ClassLoaderError> {
     let class = deserialize_constant_index(data)?;
     let name_and_type = deserialize_constant_index(data)?;
-    return Ok(Constant::InterfaceMethodRef {class: class, name_and_type: name_and_type});
+    Ok(Constant::InterfaceMethodRef {class: class, name_and_type: name_and_type})
 }
 
 fn deserialize_method_handle_ref(data: &mut bytes::Buf) -> Result<Constant, ClassLoaderError> {
@@ -132,28 +132,28 @@ fn deserialize_method_handle_ref(data: &mut bytes::Buf) -> Result<Constant, Clas
         _ => Err(ClassLoaderError::InvalidMethodHandleKind(kind)),
     };
 
-    return handle.map(|h| Constant::MethodHandleRef(h));
+    handle.map(|h| Constant::MethodHandleRef(h))
 }
 
 fn deserialize_method_type(data: &mut bytes::Buf) -> Result<Constant, ClassLoaderError> {
-    return Ok(Constant::MethodType(deserialize_constant_index(data)?));
+    Ok(Constant::MethodType(deserialize_constant_index(data)?))
 }
 
 fn deserialize_invoke_dynamic_info(data: &mut bytes::Buf) -> Result<Constant, ClassLoaderError> {
-    return Ok(Constant::InvokeDynamicInfo{
+    Ok(Constant::InvokeDynamicInfo{
         bootstrap_method_attr: deserialize_method_index(data)?,
         name_and_type: deserialize_constant_index(data)?,
-    });
+    })
 }
 
 fn deserialize_constant_index(data: &mut bytes::Buf) -> Result<ConstantIndex, ClassLoaderError> {
     require!(data has 2 bytes for "constant index");
-    return Ok(ConstantIndex(data.get_u16_be()));
+    Ok(ConstantIndex(data.get_u16_be()))
 }
 
 fn deserialize_method_index(data: &mut bytes::Buf) -> Result<MethodIndex, ClassLoaderError> {
     require!(data has 2 bytes for "method index");
-    return Ok(MethodIndex(data.get_u16_be()));
+    Ok(MethodIndex(data.get_u16_be()))
 }
 
 impl DeserializeWithConstants for Attribute {
@@ -177,18 +177,18 @@ impl DeserializeWithConstants for Attribute {
 }
 
 fn deserialize_constant_value(attribute_name: ConstantIndex, length: u32, data: &mut bytes::Buf) -> Result<Attribute, ClassLoaderError> {
-    if length != 2 {
-        return Err(ClassLoaderError::LengthMismatch {
+    if length == 2 {
+        Ok(Attribute::ConstantValue {
+            attribute_name: attribute_name,
+            constant_value: deserialize_constant_index(data)?,
+        })
+    } else {
+        Err(ClassLoaderError::LengthMismatch {
             context: "ConstantValue attribute".to_string(),
             stated_length: length,
             inferred_length: 2
-        });
+        })
     }
-
-    return Ok(Attribute::ConstantValue {
-        attribute_name: attribute_name,
-        constant_value: deserialize_constant_index(data)?,
-    });
 }
 
 fn deserialize_code(attribute_name: ConstantIndex, constants: &Vec<Constant>, declared_length: u32, data: &mut bytes::Buf) -> Result<Attribute, ClassLoaderError> {
@@ -226,25 +226,25 @@ fn deserialize_code(attribute_name: ConstantIndex, constants: &Vec<Constant>, de
         });
     }
 
-    return Ok(Attribute::Code {
+    Ok(Attribute::Code {
         attribute_name: attribute_name,
         max_stack: max_stack,
         max_locals: max_locals,
         code: code,
         exception_table: exception_table,
         attributes: attributes,
-    });
+    })
 }
 
 impl Deserialize for ExceptionTableRow {
     fn deserialize(data: &mut bytes::Buf) -> Result<ExceptionTableRow, ClassLoaderError> {
         require!(data has 8 bytes for "exception table row");
-        return Ok(ExceptionTableRow {
+        Ok(ExceptionTableRow {
             start_pc: data.get_u16_be(),
             end_pc: data.get_u16_be(),
             handler_pc: data.get_u16_be(),
             catch_type: deserialize_constant_index(data)?,
-        });
+        })
     }
 }
 
@@ -317,7 +317,7 @@ impl Deserialize for VerificationType {
     fn deserialize(data: &mut bytes::Buf) -> Result<VerificationType, ClassLoaderError> {
         require!(data has 1 byte for "verification type identifier");
         let type_id = data.get_u8();
-        return match type_id {
+        match type_id {
             0 => Ok(VerificationType::Top),
             1 => Ok(VerificationType::Integer),
             2 => Ok(VerificationType::Float),
@@ -328,10 +328,10 @@ impl Deserialize for VerificationType {
             7 => Ok(VerificationType::Object(deserialize_constant_index(data)?)),
             8 => {
                 require!(data has 2 bytes for "uninitialized variable offset");
-                return Ok(VerificationType::Uninitialized(data.get_u16_be()));
+                Ok(VerificationType::Uninitialized(data.get_u16_be()))
             },
             _ => Err(ClassLoaderError::InvalidVerificationType(type_id)),
-        };
+        }
     }
 }
 
@@ -341,7 +341,7 @@ fn deserialize_multiple<D: Deserialize>(count: usize, data: &mut bytes::Buf) -> 
         res.push(D::deserialize(data)?);
     }
 
-    return Ok(res);
+    Ok(res)
 }
 
 fn deserialize_multiple_with_constants<D: DeserializeWithConstants>(count: usize, data: &mut bytes::Buf, constants: &Vec<Constant>) -> Result<Vec<D>, ClassLoaderError> {
@@ -350,7 +350,7 @@ fn deserialize_multiple_with_constants<D: DeserializeWithConstants>(count: usize
         res.push(D::deserialize(data, constants)?);
     }
 
-    return Ok(res);
+    Ok(res)
 }
 
 #[derive(Debug, PartialEq)]
@@ -370,7 +370,7 @@ pub enum ClassLoaderError {
 
 impl std::convert::From<ConstantLookupError> for ClassLoaderError {
     fn from(cause: ConstantLookupError) -> ClassLoaderError {
-        return ClassLoaderError::InvalidConstantRef(cause);
+        ClassLoaderError::InvalidConstantRef(cause)
     }
 }
 
