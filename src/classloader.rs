@@ -356,6 +356,15 @@ impl Deserialize for VerificationType {
     }
 }
 
+impl Deserialize for InnerClassFlags {
+    fn deserialize(data: &mut bytes::Buf) -> Result<InnerClassFlags, ClassLoaderError> {
+        require!(data has 2 bytes for "inner class access flags");
+        let flag_bytes = data.get_u16_be();
+        let masked_flag_bytes = flag_bytes & InnerClassFlags::all().bits(); // Ignore unused bits per spec 4.7.6.
+        Ok(InnerClassFlags::from_bits(masked_flag_bytes).unwrap_or_else(InnerClassFlags::empty))
+    }
+}
+
 fn deserialize_multiple<D: Deserialize>(count: usize, data: &mut bytes::Buf) -> Result<Vec<D>, ClassLoaderError> {
     let mut res = vec![];
     for _ in 0..count {
@@ -2868,6 +2877,82 @@ mod tests {
                 &utf8_constant_pool(vec!["Exceptions"])
         ));
     }
+
+    #[test]
+    fn test_deserialize_inner_class_flags_public() {
+        assert_deserialize(InnerClassFlags::PUBLIC, b"\x00\x01");
+    }
+
+    #[test]
+    fn test_deserialize_inner_class_flags_private() {
+        assert_deserialize(InnerClassFlags::PRIVATE, b"\x00\x02");
+    }
+
+    #[test]
+    fn test_deserialize_inner_class_flags_protected() {
+        assert_deserialize(InnerClassFlags::PROTECTED, b"\x00\x04");
+    }
+
+    #[test]
+    fn test_deserialize_inner_class_flags_static() {
+        assert_deserialize(InnerClassFlags::STATIC, b"\x00\x08");
+    }
+
+    #[test]
+    fn test_deserialize_inner_class_flags_final() {
+        assert_deserialize(InnerClassFlags::FINAL, b"\x00\x10");
+    }
+
+    #[test]
+    fn test_deserialize_inner_class_flags_interface() {
+        assert_deserialize(InnerClassFlags::INTERFACE, b"\x02\x00");
+    }
+
+    #[test]
+    fn test_deserialize_inner_class_flags_abstract() {
+        assert_deserialize(InnerClassFlags::ABSTRACT, b"\x04\x00");
+    }
+
+    #[test]
+    fn test_deserialize_inner_class_flags_synthetic() {
+        assert_deserialize(InnerClassFlags::SYNTHETIC, b"\x10\x00");
+    }
+
+    #[test]
+    fn test_deserialize_inner_class_flags_annotation() {
+        assert_deserialize(InnerClassFlags::ANNOTATION, b"\x20\x00");
+    }
+
+    #[test]
+    fn test_deserialize_inner_class_flags_enum() {
+        assert_deserialize(InnerClassFlags::ENUM, b"\x40\x00");
+    }
+
+    #[test]
+    fn test_deserialize_inner_class_flags_public_static_final_enum() {
+        assert_deserialize(InnerClassFlags::PUBLIC | InnerClassFlags::STATIC | InnerClassFlags::FINAL | InnerClassFlags::ENUM, b"\x40\x19");
+    }
+
+    #[test]
+    fn test_deserialize_inner_class_flags_abstract_synthetic_annotation() {
+        assert_deserialize(InnerClassFlags::ABSTRACT | InnerClassFlags::SYNTHETIC | InnerClassFlags::ANNOTATION, b"\x34\x00");
+    }
+
+    #[test]
+    fn test_deserialize_inner_class_flags_all() {
+        assert_deserialize(InnerClassFlags::all(), b"\x76\x1f");
+    }
+
+    #[test]
+    fn test_deserialize_inner_class_flags_none() {
+        assert_deserialize(InnerClassFlags::empty(), b"\x00\x00");
+    }
+
+    #[test]
+    fn test_deserialize_inner_class_ignores_unused_flag_bits() {
+        assert_deserialize(InnerClassFlags::all(), b"\xff\xff");
+    }
+
     fn do_float_test(float_bits: u32, input: &[u8]) {
         assert_deserialize(Constant::Float(f32::from_bits(float_bits)), input);
     }

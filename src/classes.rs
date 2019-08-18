@@ -76,8 +76,6 @@ bitflags! {
 
 #[derive(PartialEq, Eq, Debug)]
 pub struct Field {
-    pub flags: FieldFlags,
-    pub name: ConstantIndex,
     pub descriptor: ConstantIndex,
     pub attributes: Vec<Attribute>,
 }
@@ -237,7 +235,7 @@ bitflags! {
         const STATIC     = 0x0008;
         const FINAL      = 0x0010;
         const INTERFACE  = 0x0200;
-        const ABSTRACT   = 0x0040;
+        const ABSTRACT   = 0x0400;
         const SYNTHETIC  = 0x1000;
         const ANNOTATION = 0x2000;
         const ENUM       = 0x4000;
